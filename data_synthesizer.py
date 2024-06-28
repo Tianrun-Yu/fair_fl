@@ -12,13 +12,17 @@ class DataSynthesizer:
         self.criterion = nn.CrossEntropyLoss()
         self.inner_lr = args.synthetic_data_args.synthetic_data_lr
 
-    def synthesize(self, expert_trajectory, n_iterations=None):
+    def synthesize(self, global_trajectory, n_iterations=None):
         if n_iterations is None:
             n_iterations = self.args.synthetic_data_args.n_iterations
         
+        L = len(global_trajectory)
+        s = self.args.synthetic_data_args.inner_steps
+
         # Initialize synthetic data
         synthetic_data = torch.randn(self.args.synthetic_data_args.synthetic_data_size, self.args.model_args.input_dim).to(self.device)
         synthetic_labels = torch.randint(0, self.args.model_args.output_dim, (self.args.synthetic_data_args.synthetic_data_size,)).to(self.device)
+        synthetic_sensitive_attr = torch.randint(0, 2, (self.args.synthetic_data_args.synthetic_data_size,)).to(self.device)
         
         synthetic_data.requires_grad = True
         synthetic_labels.requires_grad = True
@@ -27,35 +31,41 @@ class DataSynthesizer:
 
         for iteration in range(n_iterations):
             optimizer.zero_grad()
-            loss = self.compute_matching_loss(expert_trajectory, synthetic_data, synthetic_labels)
+            
+            # Sample t ~ U(1, L-s)
+            t = torch.randint(1, L-s, (1,)).item()
+            wt = global_trajectory[t]
+            wt_s = global_trajectory[t+s]
+            
+            # Get trained parameters
+            w_tilde = self.get_trained_params(synthetic_data, synthetic_labels, wt, s)
+            
+            # Calculate distance and gradients
+            loss = self.distance(w_tilde, wt_s)
             loss.backward()
+            
             optimizer.step()
 
             # Project labels back to valid range
             with torch.no_grad():
                 synthetic_labels.clamp_(0, self.args.model_args.output_dim - 1)
 
-        return synthetic_data.detach(), synthetic_labels.detach().long()
+        return synthetic_data.detach(), synthetic_labels.detach().long(), synthetic_sensitive_attr
 
-    def compute_matching_loss(self, expert_trajectory, synthetic_data, synthetic_labels):
-        synthetic_trajectory = self.get_synthetic_trajectory(expert_trajectory[0], synthetic_data, synthetic_labels)
-        loss = sum(self.distance(w_syn, w_exp) for w_syn, w_exp in zip(synthetic_trajectory, expert_trajectory))
-        return loss
-
-    def get_synthetic_trajectory(self, init_params, synthetic_data, synthetic_labels):
-        synthetic_trajectory = []
-        w = init_params.clone().detach()
-        for _ in range(len(expert_trajectory) - 1):
-            w = self.update(w, synthetic_data, synthetic_labels)
-            synthetic_trajectory.append(w)
-        return synthetic_trajectory
-
-    def update(self, w, x, y):
-        self.net.load_state_dict(w)
-        logits = self.net(x)
-        loss = self.criterion(logits, y)
-        grad = torch.autograd.grad(loss, self.net.parameters(), create_graph=True)
-        return OrderedDict({k: w[k] - self.inner_lr * g for k, g in zip(w.keys(), grad)})
+    def get_trained_params(self, x, y, w_init, steps):
+        w = OrderedDict({k: v.clone().detach().requires_grad_(True) for k, v in w_init.items()})
+        optimizer = optim.SGD(w.values(), lr=self.inner_lr)
+        
+        for _ in range(steps):
+            optimizer.zero_grad()
+            self.net.load_state_dict(w)
+            output = self.net(x)
+            loss = self.criterion(output, y)
+            loss.backward()
+            optimizer.step()
+            w = OrderedDict({k: v.clone().detach().requires_grad_(True) for k, v in self.net.state_dict().items()})
+        
+        return w
 
     @staticmethod
     def distance(w1, w2):
