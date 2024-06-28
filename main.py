@@ -53,6 +53,7 @@ def main():
     # init FedML framework
     args = fedml.init()
     args.run_folder = "results/{}/run_{}".format(args.task, args.random_seed)
+    os.makedirs(args.data_cache_dir, exist_ok=True)
     pathlib.Path(args.run_folder).mkdir(parents=True, exist_ok=True)
     start_time = time.time()
     device = fedml.device.get_device(args)
