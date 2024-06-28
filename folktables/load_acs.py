@@ -155,6 +155,7 @@ def load_definitions(root_dir, year=2018, horizon='1-Year', download=False):
     assert int(year) >= 2017
 
     base_datadir = os.path.join(root_dir, str(year), horizon)
+    os.makedirs(base_datadir, exist_ok=True)
     file_path = os.path.join(base_datadir, 'definition.csv')
     if os.path.exists(file_path):
         return pd.read_csv(file_path, sep=',', header=None, names=list(range(7)))
