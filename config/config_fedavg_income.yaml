@@ -14,7 +14,7 @@ tracking_args:
 data_args:
   partition: "1000_2000_2000" # train test val
   dataset: "census"
-  data_cache_dir: "../data/census/data"
+  data_cache_dir: "./data/census/data"
   attribute: "race"
   task: "income"
   load_dataset: true
