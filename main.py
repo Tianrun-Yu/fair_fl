@@ -54,7 +54,7 @@ def update_with_synthetic_data(model, Dsyn, args):
     criterion = nn.CrossEntropyLoss()
 
     model.train()
-    for epoch in range(args.local_ep):
+    for epoch in range(args.synthetic_data_args.local_ep):
         for batch_idx, (data, labels) in enumerate(Dsyn):
             data, labels = data.to(args.device), labels.to(args.device)
             optimizer.zero_grad()
@@ -73,7 +73,7 @@ def main():
     dataset, output_dim = load_data(args)
     print("load dataset time {}".format(time.time() - start_time))
     if args.model == "two-layer":
-        model = TwoNN(census_input_shape_dict[args.task], args.num_hidden, output_dim)
+        model = TwoNN(args.model_args.input_dim, args.model_args.num_hidden, args.model_args.output_dim)
     trainer = StandardTrainer(model)
     print("load model time {}".format(time.time() - start_time))
 
@@ -92,7 +92,10 @@ def main():
         # 在一半的轮次时生成伪数据
         if round_idx == args.comm_round // 2:
             synthesizer = DataSynthesizer(args)
-            synthetic_data, synthetic_labels = synthesizer.synthesize(global_model_trajectory)
+            synthetic_data, synthetic_labels = synthesizer.synthesize(
+                global_model_trajectory,
+                n_iterations=args.synthetic_data_args.n_iterations
+            )
             Dsyn = torch.utils.data.TensorDataset(synthetic_data, synthetic_labels)
             Dsyn = torch.utils.data.DataLoader(Dsyn, batch_size=args.batch_size, shuffle=True)
 
