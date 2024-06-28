@@ -1,6 +1,7 @@
 """Data source and problem definitions for American Community Survey (ACS) Public Use Microdata Sample (PUMS)."""
 import numpy as np
 import pandas as pd
+import os
 
 from . import folktables
 from .load_acs import load_acs, load_definitions
