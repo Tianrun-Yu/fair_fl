@@ -13,7 +13,7 @@ from .my_model_trainer_nwp import MyModelTrainer as MyModelTrainerNWP
 from .my_model_trainer_tag_prediction import MyModelTrainer as MyModelTrainerTAG
 import logging
 import pickle
-
+from data_synthesizer import DataSynthesizer
 
 class FedAvgAPI(object):
     def __init__(self, args, device, dataset, model, model_trainer=None):
@@ -61,6 +61,11 @@ class FedAvgAPI(object):
             val_data_local_dict,
             self.model_trainer,
         )
+        self.global_model_trajectory = []
+        self.fair_gradient = None
+        self.synthetic_data = None
+        self.synthetic_labels = None
+        self.synthetic_sensitive_attr = None
 
     def _setup_clients(
         self,
@@ -85,7 +90,45 @@ class FedAvgAPI(object):
             self.client_list.append(c)
         logging.info("############setup_clients (END)#############")
 
-    def train(self):
+
+        def calculate_eo_loss(self, model, data, labels, sensitive_attributes):
+        outputs = model(data)
+        probs = torch.sigmoid(outputs)
+        
+        pos_mask = (labels == 1)
+        group_0_mask = (sensitive_attributes == 0) & pos_mask
+        group_1_mask = (sensitive_attributes == 1) & pos_mask
+        
+        avg_prob_0 = probs[group_0_mask].mean()
+        avg_prob_1 = probs[group_1_mask].mean()
+        
+        return torch.abs(avg_prob_0 - avg_prob_1)
+
+    def generate_fair_gradient(self, model, synthetic_data, learning_rate=0.01, num_iterations=100):
+        x, y, sensitive_attr = synthetic_data
+        
+        virtual_grad = torch.zeros_like(next(model.parameters())).requires_grad_(True)
+        
+        optimizer = torch.optim.Adam([virtual_grad], lr=learning_rate)
+        
+        for _ in range(num_iterations):
+            temp_model = type(model)()
+            temp_model.load_state_dict(model.state_dict())
+            
+            with torch.no_grad():
+                for param in temp_model.parameters():
+                    param.add_(-virtual_grad)
+            
+            eo_loss = self.calculate_eo_loss(temp_model, x, y, sensitive_attr)
+            
+            eo_loss.backward()
+            
+            optimizer.step()
+            optimizer.zero_grad()
+        
+        return virtual_grad.detach()
+
+        def train(self):
         logging.info("self.model_trainer = {}".format(self.model_trainer))
         w_global = self.model_trainer.get_model_params()
         for round_idx in range(self.args.comm_round):
@@ -93,10 +136,6 @@ class FedAvgAPI(object):
 
             w_locals = []
 
-            """
-            for scalability: following the original FedAvg algorithm, we uniformly sample a fraction of clients in each round.
-            Instead of changing the 'Client' instances, our implementation keeps the 'Client' instances and then updates their local dataset 
-            """
             client_indexes = self._client_sampling(
                 round_idx, self.args.client_num_in_total, self.args.client_num_per_round
             )
@@ -109,6 +148,25 @@ class FedAvgAPI(object):
                 w_locals.append((client.get_sample_number(), copy.deepcopy(w)))
                 w_save.append(copy.deepcopy(w))
 
+            # 存储全局模型参数
+            self.global_model_trajectory.append(copy.deepcopy(w_global))
+
+            # 在指定轮次生成合成数据和公平梯度
+            if round_idx == self.args.synthetic_data_generation_round:
+                synthesizer = DataSynthesizer(self.args)
+                self.synthetic_data, self.synthetic_labels, self.synthetic_sensitive_attr = synthesizer.synthesize(self.global_model_trajectory)
+                self.fair_gradient = self.generate_fair_gradient(
+                    self.model_trainer.model,
+                    (self.synthetic_data, self.synthetic_labels, self.synthetic_sensitive_attr),
+                    learning_rate=self.args.synthetic_data_args.learning_rate,
+                    num_iterations=self.args.synthetic_data_args.num_iterations
+                )
+
+            # 从生成公平梯度后的轮次开始使用
+            if round_idx >= self.args.synthetic_data_generation_round and self.fair_gradient is not None:
+                # 将公平梯度添加到 w_locals
+                w_locals.append((len(self.synthetic_data), self.fair_gradient))
+
             w_global = self._aggregate(w_locals, round_idx)
             self.model_trainer.set_model_params(w_global)
 
@@ -119,7 +177,7 @@ class FedAvgAPI(object):
                         self.args.run_folder,
                         "%s_at_%s.pt" % (self.args.save_model_name, round_idx),
                     ),
-                )  # check the fedavg model name
+                )
                 with open(
                     "%s/%s_locals_at_%s.pt"
                     % (self.args.run_folder, self.args.save_model_name, round_idx),
