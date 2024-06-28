@@ -91,7 +91,7 @@ class FedAvgAPI(object):
         logging.info("############setup_clients (END)#############")
 
 
-        def calculate_eo_loss(self, model, data, labels, sensitive_attributes):
+    def calculate_eo_loss(self, model, data, labels, sensitive_attributes):
         outputs = model(data)
         probs = torch.sigmoid(outputs)
         
@@ -128,8 +128,7 @@ class FedAvgAPI(object):
         
         return virtual_grad.detach()
 
-        def train(self):
-        logging.info("self.model_trainer = {}".format(self.model_trainer))
+    def train(self):
         w_global = self.model_trainer.get_model_params()
         for round_idx in range(self.args.comm_round):
             logging.info("################Communication round : {}".format(round_idx))
@@ -141,12 +140,10 @@ class FedAvgAPI(object):
             )
             logging.info("client_indexes = " + str(client_indexes))
 
-            w_save = []
             for idx, client_idx in enumerate(client_indexes):
                 client = self.client_list[idx]
                 w = client.train(copy.deepcopy(w_global))
                 w_locals.append((client.get_sample_number(), copy.deepcopy(w)))
-                w_save.append(copy.deepcopy(w))
 
             # 存储全局模型参数
             self.global_model_trajectory.append(copy.deepcopy(w_global))
