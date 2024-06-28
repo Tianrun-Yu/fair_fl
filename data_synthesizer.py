@@ -8,19 +8,22 @@ class DataSynthesizer:
     def __init__(self, args):
         self.args = args
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.net = TwoNN(args.input_dim, args.num_hidden, args.output_dim).to(self.device)
+        self.net = TwoNN(args.model_args.input_dim, args.model_args.num_hidden, args.model_args.output_dim).to(self.device)
         self.criterion = nn.CrossEntropyLoss()
-        self.inner_lr = args.lr
+        self.inner_lr = args.synthetic_data_args.synthetic_data_lr
 
-    def synthesize(self, expert_trajectory, n_iterations=1000):
+    def synthesize(self, expert_trajectory, n_iterations=None):
+        if n_iterations is None:
+            n_iterations = self.args.synthetic_data_args.n_iterations
+        
         # Initialize synthetic data
-        synthetic_data = torch.randn(self.args.synthetic_data_size, self.args.input_dim).to(self.device)
-        synthetic_labels = torch.randint(0, self.args.output_dim, (self.args.synthetic_data_size,)).to(self.device)
+        synthetic_data = torch.randn(self.args.synthetic_data_args.synthetic_data_size, self.args.model_args.input_dim).to(self.device)
+        synthetic_labels = torch.randint(0, self.args.model_args.output_dim, (self.args.synthetic_data_args.synthetic_data_size,)).to(self.device)
         
         synthetic_data.requires_grad = True
         synthetic_labels.requires_grad = True
 
-        optimizer = optim.Adam([synthetic_data, synthetic_labels], lr=0.01)
+        optimizer = optim.Adam([synthetic_data, synthetic_labels], lr=self.args.synthetic_data_args.synthetic_data_lr)
 
         for iteration in range(n_iterations):
             optimizer.zero_grad()
@@ -30,7 +33,7 @@ class DataSynthesizer:
 
             # Project labels back to valid range
             with torch.no_grad():
-                synthetic_labels.clamp_(0, self.args.output_dim - 1)
+                synthetic_labels.clamp_(0, self.args.model_args.output_dim - 1)
 
         return synthetic_data.detach(), synthetic_labels.detach().long()
 
