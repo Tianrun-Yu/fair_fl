@@ -42,7 +42,7 @@ class StandardTrainer(ClientTrainer):
         epoch_loss = []
         for _ in range(args.epochs):
             batch_loss = []
-            for x, labels, s in enumerate(train_data):
+            for batch_idx, (x, labels, s) in enumerate(train_data):
                 x, labels = x.to(device), labels.to(device)
                 model.zero_grad()
                 log_probs = model(x)
