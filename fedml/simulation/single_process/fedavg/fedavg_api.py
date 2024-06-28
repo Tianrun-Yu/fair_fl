@@ -35,6 +35,8 @@ class FedAvgAPI(object):
         self.val_global = None
         self.train_data_num_in_total = train_data_num
         self.test_data_num_in_total = test_data_num
+        self.fair_gradient = None
+        self.synthetic_data_size = None
 
         self.client_list = []
         self.train_data_local_num_dict = train_data_local_num_dict
@@ -106,34 +108,49 @@ class FedAvgAPI(object):
 
     def generate_fair_gradient(self, model, synthetic_data, learning_rate=0.01, num_iterations=100):
         x, y, sensitive_attr = synthetic_data
-        
-        virtual_grad = torch.zeros_like(next(model.parameters())).requires_grad_(True)
-        
-        optimizer = torch.optim.Adam([virtual_grad], lr=learning_rate)
-        
+        device = next(model.parameters()).device  # 获取模型所在的设备
+
+        # 确保所有数据都在正确的设备上
+        x = x.to(device)
+        y = y.to(device)
+        sensitive_attr = sensitive_attr.to(device)
+    
+        # 为每个模型参数创建一个虚拟梯度，确保在正确的设备上
+        virtual_grads = {name: torch.zeros_like(param, requires_grad=True, device=device) 
+                        for name, param in model.named_parameters()}
+    
+        optimizer = torch.optim.Adam(virtual_grads.values(), lr=learning_rate)
+    
         for _ in range(num_iterations):
-            temp_model = type(model)()
+            temp_model = type(model)(
+                input_dim=self.args.input_dim,
+                hidden_outdim=self.args.num_hidden,
+                output_dim=self.args.output_dim
+            ).to(device)  # 将临时模型移到正确的设备上
             temp_model.load_state_dict(model.state_dict())
-            
+    
+            # 应用虚拟梯度到临时模型的每个参数
             with torch.no_grad():
-                for param in temp_model.parameters():
-                    param.add_(-virtual_grad)
-            
+                for name, param in temp_model.named_parameters():
+                    param.add_(-virtual_grads[name])
+    
             eo_loss = self.calculate_eo_loss(temp_model, x, y, sensitive_attr)
-            
+    
             eo_loss.backward()
-            
+    
             optimizer.step()
             optimizer.zero_grad()
-        
-        return virtual_grad.detach()
+
+        return {name: grad.detach() for name, grad in virtual_grads.items()}
 
     def train(self):
         w_global = self.model_trainer.get_model_params()
+
         for round_idx in range(self.args.comm_round):
             logging.info("################Communication round : {}".format(round_idx))
 
             w_locals = []
+            w_save = []      
 
             client_indexes = self._client_sampling(
                 round_idx, self.args.client_num_in_total, self.args.client_num_per_round
@@ -155,8 +172,8 @@ class FedAvgAPI(object):
                 self.fair_gradient = self.generate_fair_gradient(
                     self.model_trainer.model,
                     (self.synthetic_data, self.synthetic_labels, self.synthetic_sensitive_attr),
-                    learning_rate=self.args.synthetic_data_args.learning_rate,
-                    num_iterations=self.args.synthetic_data_args.num_iterations
+                    learning_rate=self.args.learning_rate,
+                    num_iterations=self.args.num_iterations
                 )
 
             # 从生成公平梯度后的轮次开始使用
@@ -188,6 +205,81 @@ class FedAvgAPI(object):
             ):
                 self._local_test_on_all_clients(round_idx)
 
+    def train_one_round(self, round_idx, w_global):
+        logging.info("################Communication round : {}".format(round_idx))
+
+        w_locals = []
+        w_save = []      
+
+        client_indexes = self._client_sampling(
+            round_idx, self.args.client_num_in_total, self.args.client_num_per_round
+        )
+        logging.info("client_indexes = " + str(client_indexes))
+
+        for idx, client_idx in enumerate(client_indexes):
+            client = self.client_list[idx]
+            w = client.train(copy.deepcopy(w_global))
+            w_locals.append((client.get_sample_number(), copy.deepcopy(w)))
+
+        # 存储全局模型参数
+        self.global_model_trajectory.append(copy.deepcopy(w_global))
+
+        # 在指定轮次生成合成数据和公平梯度
+        if round_idx == self.args.synthetic_data_generation_round:
+            synthesizer = DataSynthesizer(self.args)
+            self.synthetic_data, self.synthetic_labels, self.synthetic_sensitive_attr = synthesizer.synthesize(self.global_model_trajectory)
+        
+            # 确保合成数据在正确的设备上
+            device = next(self.model_trainer.model.parameters()).device
+            self.synthetic_data = self.synthetic_data.to(device)
+            self.synthetic_labels = self.synthetic_labels.to(device)
+            self.synthetic_sensitive_attr = self.synthetic_sensitive_attr.to(device)
+        
+            self.fair_gradient = self.generate_fair_gradient(
+                self.model_trainer.model,
+                (self.synthetic_data, self.synthetic_labels, self.synthetic_sensitive_attr),
+                learning_rate=self.args.learning_rate,
+                num_iterations=self.args.num_iterations
+            )
+            logging.info(f"Synthetic data size: {len(self.synthetic_data)}")
+            logging.info(f"Fair gradient generated: {self.fair_gradient is not None}")
+
+        # 从生成公平梯度后的轮次开始使用
+        if round_idx >= self.args.synthetic_data_generation_round and self.fair_gradient is not None:
+            # 将公平梯度添加到 w_locals
+                logging.info("Adding fair gradient to aggregation")
+                device = next(self.model_trainer.model.parameters()).device
+                fair_gradient = {k: v.to(device) for k, v in self.fair_gradient.items()}
+                w_locals.append((len(self.synthetic_data), fair_gradient))
+
+        w_global = self._aggregate(w_locals, round_idx)
+        self.model_trainer.set_model_params(w_global)
+
+        if round_idx % self.args.save_epoches == 0:
+            torch.save(
+                self.model_trainer.model.state_dict(),
+                os.path.join(
+                    self.args.run_folder,
+                    "%s_at_%s.pt" % (self.args.save_model_name, round_idx),
+                ),
+            )
+            with open(
+                "%s/%s_locals_at_%s.pt"
+                % (self.args.run_folder, self.args.save_model_name, round_idx),
+                "wb",
+            ) as f:
+                pickle.dump(w_save, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+        if (
+            round_idx == self.args.comm_round - 1
+            or round_idx % self.args.frequency_of_the_test == 0
+        ):
+            self._local_test_on_all_clients(round_idx)
+
+       # self.global_model_trajectory.append(copy.deepcopy({k: v.cpu() for k, v in w_global.items()}))
+
+        return w_global
+
     def _client_sampling(self, round_idx, client_num_in_total, client_num_per_round):
         if client_num_in_total == client_num_per_round:
             client_indexes = self.args.users
@@ -213,32 +305,31 @@ class FedAvgAPI(object):
             training_num += sample_num
 
         (sample_num, averaged_params) = w_locals[0]
+        device = next(iter(averaged_params.values())).device
+
         for k in averaged_params.keys():
-            for i in range(0, len(w_locals)):
+            averaged_params[k] = averaged_params[k].to(device)
+            for i in range(1, len(w_locals)):
                 local_sample_number, local_model_params = w_locals[i]
                 w = local_sample_number / training_num
-                if i == 0:
-                    averaged_params[k] = local_model_params[k] * w
-                else:
-                    averaged_params[k] += local_model_params[k] * w
+                averaged_params[k] += local_model_params[k].to(device) * w
 
         return averaged_params
-
-    def _aggregate_noniid_avg(self, w_locals):
-        # uniform aggregation
-        """
-        The old aggregate method will impact the model performance when it comes to Non-IID setting
-        Args:
-            w_locals:
-        Returns:
-        """
-        (_, averaged_params) = w_locals[0]
-        for k in averaged_params.keys():
-            temp_w = []
-            for _, local_w in w_locals:
-                temp_w.append(local_w[k])
-            averaged_params[k] = sum(temp_w) / len(temp_w)
-        return averaged_params
+        def _aggregate_noniid_avg(self, w_locals):
+            # uniform aggregation
+            """
+            The old aggregate method will impact the model performance when it comes to Non-IID setting
+            Args:
+                w_locals:
+            Returns:
+            """
+            (_, averaged_params) = w_locals[0]
+            for k in averaged_params.keys():
+                temp_w = []
+                for _, local_w in w_locals:
+                    temp_w.append(local_w[k])
+                averaged_params[k] = sum(temp_w) / len(temp_w)
+            return averaged_params
 
     def _local_test_on_all_clients(self, round_idx):
         logging.info("################local_test_on_all_clients : {}".format(round_idx))
