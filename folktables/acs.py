@@ -27,6 +27,7 @@ class ACSDataSource(folktables.DataSource):
         self._horizon = horizon
         self._survey = survey
         self._root_dir = root_dir
+        self._root_dir = os.path.abspath(root_dir)
 
     def get_data(self, states=None, density=1.0, random_seed=0, join_household=False, download=False):
         """Get data from given list of states, density, and random seed. Optionally add household features."""
