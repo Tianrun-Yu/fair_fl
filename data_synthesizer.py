@@ -10,14 +10,14 @@ class DataSynthesizer:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.net = TwoNN(args.model_args.input_dim, args.model_args.num_hidden, args.model_args.output_dim).to(self.device)
         self.criterion = nn.CrossEntropyLoss()
-        self.inner_lr = args.synthetic_data_args.synthetic_data_lr
+        self.inner_lr = args.synthetic_data_args.learning_rate
 
     def synthesize(self, global_trajectory, n_iterations=None):
         if n_iterations is None:
             n_iterations = self.args.synthetic_data_args.n_iterations
         
         L = len(global_trajectory)
-        s = self.args.synthetic_data_args.inner_steps
+        s = self.args.synthetic_data_args.local_ep
 
         # Initialize synthetic data
         synthetic_data = torch.randn(self.args.synthetic_data_args.synthetic_data_size, self.args.model_args.input_dim).to(self.device)
@@ -27,7 +27,7 @@ class DataSynthesizer:
         synthetic_data.requires_grad = True
         synthetic_labels.requires_grad = True
 
-        optimizer = optim.Adam([synthetic_data, synthetic_labels], lr=self.args.synthetic_data_args.synthetic_data_lr)
+        optimizer = optim.Adam([synthetic_data, synthetic_labels], lr=self.args.synthetic_data_args.learning_rate)
 
         for iteration in range(n_iterations):
             optimizer.zero_grad()
