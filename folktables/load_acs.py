@@ -31,6 +31,7 @@ _STATE_CODES = {'AL': '01', 'AK': '02', 'AZ': '04', 'AR': '05', 'CA': '06',
 
 def download_and_extract(url, datadir, remote_fname, file_name, delete_download=False):
     """Helper function to download and unzip files."""
+    os.makedirs(datadir, exist_ok=True)  
     download_path = os.path.join(datadir, remote_fname)
     response = requests.get(url)
     with open(download_path, 'wb') as handle:
