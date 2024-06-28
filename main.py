@@ -1,17 +1,18 @@
 import fedml
 import torch
+import torch.nn as nn
 from data_loader import load_partition_data_census
 from fedml.simulation import SimulatorSingleProcess as Simulator
 from standard_trainer import StandardTrainer
 import pathlib
 import os
 import time
+import copy
 
 from model import TwoNN
-
+from image_synthesizer import ImageSynthesizer
 
 census_input_shape_dict = {"income": 54, "health": 154, "employment": 109}
-
 
 def load_data(args):
     fedml.logging.info("load_data. dataset_name = %s" % args.dataset)
@@ -48,6 +49,19 @@ def load_data(args):
     ]
     return dataset, class_num
 
+def update_with_synthetic_data(model, Dsyn, args):
+    optimizer = torch.optim.SGD(model.parameters(), lr=args.lr)
+    criterion = nn.CrossEntropyLoss()
+
+    model.train()
+    for epoch in range(args.local_ep):
+        for batch_idx, (data, labels) in enumerate(Dsyn):
+            data, labels = data.to(args.device), labels.to(args.device)
+            optimizer.zero_grad()
+            log_probs = model(data)
+            loss = criterion(log_probs, labels)
+            loss.backward()
+            optimizer.step()
 
 def main():
     # init FedML framework
@@ -64,7 +78,26 @@ def main():
     print("load model time {}".format(time.time() - start_time))
 
     simulator = Simulator(args, device, dataset, model, trainer)
-    simulator.run()
+
+    # 添加全局模型轨迹的存储
+    global_model_trajectory = []
+    Dsyn = None
+
+    for round_idx in range(args.comm_round):
+        simulator.run_one_round()
+
+        # 存储全局模型参数
+        global_model_trajectory.append(copy.deepcopy(simulator.fl_trainer.model_trainer.model.state_dict()))
+
+        # 在一半的轮次时生成伪数据
+        if round_idx == args.comm_round // 2:
+            synthesizer = ImageSynthesizer(args)
+            Dsyn = synthesizer.synthesize(global_model_trajectory)
+
+        # 从生成伪数据后的下一轮开始使用
+        if round_idx > args.comm_round // 2 and Dsyn is not None:
+            # 使用伪数据更新模型
+            update_with_synthetic_data(simulator.fl_trainer.model_trainer.model, Dsyn, args)
 
     simulator.fl_trainer.save()
     print("finishing time {}".format(time.time() - start_time))
@@ -72,7 +105,6 @@ def main():
         simulator.fl_trainer.model_trainer.model.state_dict(),
         os.path.join(args.run_folder, "%s.pt" % (args.save_model_name)),
     )
-
 
 if __name__ == "__main__":
     main()
