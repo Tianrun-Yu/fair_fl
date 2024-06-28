@@ -49,20 +49,6 @@ def load_data(args):
     ]
     return dataset, class_num
 
-def update_with_synthetic_data(model, Dsyn, args):
-    optimizer = torch.optim.SGD(model.parameters(), lr=args.lr)
-    criterion = nn.CrossEntropyLoss()
-
-    model.train()
-    for epoch in range(args.synthetic_data_args.local_ep):
-        for batch_idx, (data, labels) in enumerate(Dsyn):
-            data, labels = data.to(args.device), labels.to(args.device)
-            optimizer.zero_grad()
-            log_probs = model(data)
-            loss = criterion(log_probs, labels)
-            loss.backward()
-            optimizer.step()
-
 def main():
     # init FedML framework
     args = fedml.init()
@@ -77,11 +63,13 @@ def main():
     trainer = StandardTrainer(model)
     print("load model time {}".format(time.time() - start_time))
 
+    # 设置合成数据生成的轮次
+    args.synthetic_data_generation_round = args.comm_round // 2
+
     simulator = Simulator(args, device, dataset, model, trainer)
 
-    # 添加全局模型轨迹的存储
+    # 存储全局模型轨迹
     global_model_trajectory = []
-    Dsyn = None
 
     for round_idx in range(args.comm_round):
         simulator.run_one_round()
@@ -89,20 +77,29 @@ def main():
         # 存储全局模型参数
         global_model_trajectory.append(copy.deepcopy(simulator.fl_trainer.model_trainer.model.state_dict()))
 
-        # 在一半的轮次时生成伪数据
-        if round_idx == args.comm_round // 2:
+        # 在指定轮次生成合成数据和公平梯度
+        if round_idx == args.synthetic_data_generation_round:
+            # 生成合成数据
             synthesizer = DataSynthesizer(args)
-            synthetic_data, synthetic_labels = synthesizer.synthesize(
+            synthetic_data, synthetic_labels, synthetic_sensitive_attr = synthesizer.synthesize(
                 global_model_trajectory,
                 n_iterations=args.synthetic_data_args.n_iterations
             )
-            Dsyn = torch.utils.data.TensorDataset(synthetic_data, synthetic_labels)
-            Dsyn = torch.utils.data.DataLoader(Dsyn, batch_size=args.batch_size, shuffle=True)
 
-        # 从生成伪数据后的下一轮开始使用
-        if round_idx > args.comm_round // 2 and Dsyn is not None:
-            # 使用伪数据更新模型
-            update_with_synthetic_data(simulator.fl_trainer.model_trainer.model, Dsyn, args)
+            # 生成公平梯度
+            fair_gradient = simulator.fl_trainer.generate_fair_gradient(
+                simulator.fl_trainer.model_trainer.model,
+                (synthetic_data, synthetic_labels, synthetic_sensitive_attr),
+                learning_rate=args.synthetic_data_args.learning_rate,
+                num_iterations=args.synthetic_data_args.num_iterations
+            )
+
+            # 将公平梯度添加到 FedAvgAPI 中
+            simulator.fl_trainer.fair_gradient = fair_gradient
+
+        # 从生成公平梯度后的轮次开始使用
+        if round_idx > args.synthetic_data_generation_round:
+            # 在 FedAvgAPI 中，公平梯度会自动被添加到聚合过程中
 
     simulator.fl_trainer.save()
     print("finishing time {}".format(time.time() - start_time))
@@ -110,6 +107,5 @@ def main():
         simulator.fl_trainer.model_trainer.model.state_dict(),
         os.path.join(args.run_folder, "%s.pt" % (args.save_model_name)),
     )
-
 if __name__ == "__main__":
     main()
