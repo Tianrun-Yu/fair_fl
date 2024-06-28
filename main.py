@@ -10,7 +10,7 @@ import time
 import copy
 
 from model import TwoNN
-from image_synthesizer import ImageSynthesizer
+from data_synthesizer import DataSynthesizer
 
 census_input_shape_dict = {"income": 54, "health": 154, "employment": 109}
 
@@ -91,8 +91,10 @@ def main():
 
         # 在一半的轮次时生成伪数据
         if round_idx == args.comm_round // 2:
-            synthesizer = ImageSynthesizer(args)
-            Dsyn = synthesizer.synthesize(global_model_trajectory)
+            synthesizer = DataSynthesizer(args)
+            synthetic_data, synthetic_labels = synthesizer.synthesize(global_model_trajectory)
+            Dsyn = torch.utils.data.TensorDataset(synthetic_data, synthetic_labels)
+            Dsyn = torch.utils.data.DataLoader(Dsyn, batch_size=args.batch_size, shuffle=True)
 
         # 从生成伪数据后的下一轮开始使用
         if round_idx > args.comm_round // 2 and Dsyn is not None:
