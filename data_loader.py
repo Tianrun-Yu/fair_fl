@@ -65,7 +65,7 @@ STATE_LIST = [
     "PR",
 ]
 
-
+## 无语了 下面这个函数没输出
 def get_raw_data_by_client(state, args, survey_year="2018"):
     data_source = ACSDataSource(
         survey_year=survey_year,
@@ -104,7 +104,7 @@ def get_raw_data_by_client(state, args, survey_year="2018"):
         print(x.shape)
     return x, y, s
 
-
+#下面这个函数也没调用啊啊啊啊
 def partition_dataset(y, args):
     all_index = [i for i in range(y.shape[0])]
     num_train = int(args.partition.split("_")[0])
@@ -132,7 +132,7 @@ def partition_dataset(y, args):
 
     return s_train, s_test, s_val, unselected_index
 
-
+##这个函数压根没运行。。。。
 def get_dataloader(client_idx, args=None):
     task = args.task
     random_seed = args.random_seed
@@ -184,6 +184,7 @@ def load_partition_data_census(users, args):
         return dataset
 
     else:
+        print('啊啊啊啊啊啊啊啊啊啊啊啊啊啊啊啊啊啊啊啊啊看得到我吗？？？？？？？？？？')
         train_data_local_dict = dict()
         test_data_local_dict = dict()
         train_data_local_num_dict = dict()

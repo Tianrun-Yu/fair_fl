@@ -54,6 +54,69 @@ class MyModelTrainer(ClientTrainer):
             #     self.client_idx, epoch, sum(epoch_loss) / len(epoch_loss)))
 
     def test(self, test_data, device, args):
+        print('我是test我运行了1')
+        model = self.model
+        model.to(device)
+        model.eval()
+
+        metrics = {"test_correct": 0, "test_loss": 0, "test_total": 0}
+        criterion = nn.CrossEntropyLoss().to(device)
+
+        target_list = []
+        s_list = []
+        x_list = []
+        pred_list = []
+
+        with torch.no_grad():
+            for x, target, s in test_data:
+                target_list.extend(target.tolist())
+                s_list.extend(s.tolist())
+                x_list.extend(x.tolist())
+
+                x = x.to(device)
+                target = target.to(device)
+                s = s.to(device)
+                print('我是test我运行了2')
+                print(s)
+                logits = model(x)
+                loss = criterion(logits, target)
+
+                _, predicted = torch.max(logits, -1)
+
+                correct = predicted.eq(target).sum()
+                pred_list.extend(predicted.detach().cpu().tolist())
+                metrics["test_correct"] += correct.item()
+                metrics["test_loss"] += loss.item() * target.size(0)
+                metrics["test_total"] += target.size(0)
+
+        target_list = np.array(target_list)
+        s_list = np.array(s_list)
+        x_list = np.array(x_list)
+        pred_list = np.array(pred_list)
+        pred_acc = pred_list == target_list
+
+        ppr_list = []
+        tnr_list = []
+        tpr_list = []
+        converted_s = s_list[:, 1]  # sex, 1 attribute
+
+        for s_value in np.unique(converted_s):
+            if np.mean(converted_s == s_value) > 0.01:
+                indexs0 = np.logical_and(target_list == 0, converted_s == s_value)
+                indexs1 = np.logical_and(target_list == 1, converted_s == s_value)
+                ppr_list.append(np.mean(pred_list[converted_s == s_value]))
+                tnr_list.append(np.mean(pred_acc[indexs0]))
+                tpr_list.append(np.mean(pred_acc[indexs1]))
+
+        eo_gap = max(max(tnr_list) - min(tnr_list), max(tpr_list) - min(tpr_list))
+        dp_gap = max(ppr_list) - min(ppr_list)
+
+        metrics["eo_gap"] = eo_gap
+        metrics["dp_gap"] = dp_gap
+
+        return metrics
+    """""
+    def test(self, test_data, device, args):
         model = self.model
 
         model.to(device)
@@ -67,12 +130,12 @@ class MyModelTrainer(ClientTrainer):
             "test_total": 0,
         }
 
-        """
+    
         stackoverflow_lr is the task of multi-label classification
         please refer to following links for detailed explainations on cross-entropy and corresponding implementation of tff research:
         https://towardsdatascience.com/cross-entropy-for-classification-d98e7f974451
         https://github.com/google-research/federated/blob/49a43456aa5eaee3e1749855eed89c0087983541/optimization/stackoverflow_lr/federated_stackoverflow_lr.py#L131
-        """
+      
         if args.dataset == "stackoverflow_lr":
             criterion = nn.BCELoss(reduction="sum").to(device)
         else:
@@ -104,7 +167,7 @@ class MyModelTrainer(ClientTrainer):
                 elif len(target.size()) == 2:  # for tasks of next word prediction
                     metrics["test_total"] += target.size(0) * target.size(1)
         return metrics
-
+    """""
     def test_on_the_server(
         self, train_data_local_dict, test_data_local_dict, device, args=None
     ) -> bool:

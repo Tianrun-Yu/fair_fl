@@ -166,10 +166,10 @@ if __name__ == "__main__":
 
     for random_seed in random_seed_list:
         if os.path.isfile(
-            "../results/{}/run_{}/data.pkl".format(args.task, random_seed)
+            "/home/carry/sage_fl/results/{}/run_{}/data.pkl".format(args.task, random_seed)
         ):
             # load the dataset used by the model
-            folder_path = "../results/{}/run_{}".format(args.task, random_seed)
+            folder_path = "/home/carry/sage_fl/results/{}/run_{}".format(args.task, random_seed)
             data_file = "{}/data.pkl".format(folder_path)
             with open(data_file, "rb") as f:  # Python 3: open(..., 'rb')
                 dataset = pickle.load(f)

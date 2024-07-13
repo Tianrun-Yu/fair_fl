@@ -1,3 +1,5 @@
 log/*
 results/*
 .vscode/*
+/data/
+/__pycache__/

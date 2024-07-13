@@ -177,6 +177,7 @@ def load_definitions(root_dir, year=2018, horizon='1-Year', download=False):
 
 
 def generate_categories(features, definition_df):
+    print('啦啦啦我是产生种类函数我调用了a a a a a a a a')
     """Generates a categories dictionary using the provided definition dataframe. Does not create a category mapping
     for variables requiring the 2010 Public use microdata area code (PUMA) as these need an additional definition
     file which are not unique without the state code.

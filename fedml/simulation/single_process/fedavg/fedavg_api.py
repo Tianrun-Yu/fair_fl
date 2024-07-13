@@ -2,7 +2,7 @@ from cmath import log
 import copy
 import logging
 import random
-
+import standard_trainer
 import numpy as np
 import torch
 import wandb
@@ -37,7 +37,9 @@ class FedAvgAPI(object):
         self.test_data_num_in_total = test_data_num
         self.fair_gradient = None
         self.synthetic_data_size = None
-
+        self.acc_list_all_round = []
+        self.eo_list_all_round = []
+        self.dp_list_all_round = []
         self.client_list = []
         self.train_data_local_num_dict = train_data_local_num_dict
         self.train_data_local_dict = train_data_local_dict
@@ -95,95 +97,109 @@ class FedAvgAPI(object):
 
     def calculate_eo_loss(self, model, data, labels, sensitive_attributes):
         outputs = model(data)
-        probs = torch.sigmoid(outputs)
+        # 获取每个参数的梯度
+        """""
+        for name, param in model.named_parameters():
+            print(f"Parameter name: {name}")
+            print(param)
+        """""
         
+        probs = torch.sigmoid(outputs)
+        ##print('啦啦啦我是敏感属性'+str(sensitive_attributes))
         pos_mask = (labels == 1)
         group_0_mask = (sensitive_attributes == 0) & pos_mask
         group_1_mask = (sensitive_attributes == 1) & pos_mask
-        
+        ##print('啦啦啦我是概率'+str(probs))
         avg_prob_0 = probs[group_0_mask].mean()
         avg_prob_1 = probs[group_1_mask].mean()
-        
+        print('啦啦啦我是0的平均'+ str(avg_prob_0)+'啦啦啦我是1的平均'+str(avg_prob_1) )
         return torch.abs(avg_prob_0 - avg_prob_1)
-
-    def generate_fair_gradient(self, model, synthetic_data, learning_rate=0.01, num_iterations=100):
+    def generate_fair_gradient(self, model, synthetic_data, learning_rate=0.1):
         x, y, sensitive_attr = synthetic_data
-        device = next(model.parameters()).device  # 获取模型所在的设备
+        device = next(model.parameters()).device  # Get the device where the model resides
 
-        # 确保所有数据都在正确的设备上
+        # Ensure all data is on the correct device
         x = x.to(device)
         y = y.to(device)
         sensitive_attr = sensitive_attr.to(device)
-    
-        # 为每个模型参数创建一个虚拟梯度，确保在正确的设备上
-        virtual_grads = {name: torch.zeros_like(param, requires_grad=True, device=device) 
-                        for name, param in model.named_parameters()}
-    
-        optimizer = torch.optim.Adam(virtual_grads.values(), lr=learning_rate)
-    
-        for _ in range(num_iterations):
-            temp_model = type(model)(
-                input_dim=self.args.input_dim,
-                hidden_outdim=self.args.num_hidden,
-                output_dim=self.args.output_dim
-            ).to(device)  # 将临时模型移到正确的设备上
-            temp_model.load_state_dict(model.state_dict())
-    
-            # 应用虚拟梯度到临时模型的每个参数
-            with torch.no_grad():
-                for name, param in temp_model.named_parameters():
-                    param.add_(-virtual_grads[name])
-    
-            eo_loss = self.calculate_eo_loss(temp_model, x, y, sensitive_attr)
-    
-            eo_loss.backward()
-    
-            optimizer.step()
-            optimizer.zero_grad()
 
-        return {name: grad.detach() for name, grad in virtual_grads.items()}
+        # Create a temporary model for a single gradient descent step
+        temp_model = type(model)(
+            input_dim=self.args.input_dim,
+            hidden_outdim=self.args.num_hidden,
+            output_dim=self.args.output_dim
+        ).to(device)  # Move the temporary model to the correct device
+        temp_model.load_state_dict(model.state_dict())
 
+        # Define optimizer and calculate equal opportunity (eo) loss
+        optimizer = torch.optim.Adam(temp_model.parameters(), lr=learning_rate)
+    
+        
+        eo_loss = self.calculate_eo_loss(temp_model, x, y, sensitive_attr)
+        ##print('啦啦啦啦我是eo的loss，看看我爆炸没+'f'EO Loss: {eo_loss.item()}')
+
+
+        # Backward pass and update model
+        optimizer.zero_grad()  # Clear gradients
+        eo_loss.backward()
+        optimizer.step()
+        for name, param in temp_model.named_parameters():
+            print('啦啦啦我是梯度更新关于公平的')
+            print(f'Gradient - {name}:')
+            print(param.grad)
+        # Return gradients of updated model parameters as a dictionary
+        return {name: param.clone().detach() for name, param in temp_model.named_parameters()}
+    
     def train(self):
+        logging.info("self.model_trainer = {}".format(self.model_trainer))
         w_global = self.model_trainer.get_model_params()
-
         for round_idx in range(self.args.comm_round):
             logging.info("################Communication round : {}".format(round_idx))
-
+            self.global_model_trajectory.append(copy.deepcopy(w_global))
             w_locals = []
-            w_save = []      
 
+            """
+            for scalability: following the original FedAvg algorithm, we uniformly sample a fraction of clients in each round.
+            Instead of changing the 'Client' instances, our implementation keeps the 'Client' instances and then updates their local dataset 
+            """
             client_indexes = self._client_sampling(
                 round_idx, self.args.client_num_in_total, self.args.client_num_per_round
             )
             logging.info("client_indexes = " + str(client_indexes))
 
+            w_save = []
             for idx, client_idx in enumerate(client_indexes):
                 client = self.client_list[idx]
                 w = client.train(copy.deepcopy(w_global))
                 w_locals.append((client.get_sample_number(), copy.deepcopy(w)))
+                w_save.append(copy.deepcopy(w))
 
-            # 存储全局模型参数
-            self.global_model_trajectory.append(copy.deepcopy(w_global))
+            w_global = self._aggregate(w_locals, round_idx)
+            self.model_trainer.set_model_params(w_global)
 
             # 在指定轮次生成合成数据和公平梯度
             if round_idx == self.args.synthetic_data_generation_round:
                 synthesizer = DataSynthesizer(self.args)
                 self.synthetic_data, self.synthetic_labels, self.synthetic_sensitive_attr = synthesizer.synthesize(self.global_model_trajectory)
+                ##print('啦啦啦我是假数据'+str(self.synthetic_data))
+            # 从生成公平梯度后的轮次开始使用
+            if round_idx >= self.args.synthetic_data_generation_round:
+                # 将公平梯度添加到 w_locals
+                print('啦啦啦我是假梯度额外的步骤我运行了'+str(self.args.synthetic_data_generation_round))
+                device = next(self.model_trainer.model.parameters()).device
+                self.synthetic_data = self.synthetic_data.to(device)
+                self.synthetic_labels = self.synthetic_labels.to(device)
+                self.synthetic_sensitive_attr = self.synthetic_sensitive_attr.to(device)
+            
                 self.fair_gradient = self.generate_fair_gradient(
                     self.model_trainer.model,
                     (self.synthetic_data, self.synthetic_labels, self.synthetic_sensitive_attr),
                     learning_rate=self.args.learning_rate,
-                    num_iterations=self.args.num_iterations
                 )
-
-            # 从生成公平梯度后的轮次开始使用
-            if round_idx >= self.args.synthetic_data_generation_round and self.fair_gradient is not None:
-                # 将公平梯度添加到 w_locals
-                w_locals.append((len(self.synthetic_data), self.fair_gradient))
-
-            w_global = self._aggregate(w_locals, round_idx)
-            self.model_trainer.set_model_params(w_global)
-
+                fair_gradient = {k: v.to(device) for k, v in self.fair_gradient.items()}
+                ##print('啦啦啦我是公平梯度'+str(fair_gradient))
+                self.model_trainer.set_model_params(fair_gradient)
+        
             if round_idx % self.args.save_epoches == 0:
                 torch.save(
                     self.model_trainer.model.state_dict(),
@@ -191,7 +207,7 @@ class FedAvgAPI(object):
                         self.args.run_folder,
                         "%s_at_%s.pt" % (self.args.save_model_name, round_idx),
                     ),
-                )
+                )  # check the fedavg model name
                 with open(
                     "%s/%s_locals_at_%s.pt"
                     % (self.args.run_folder, self.args.save_model_name, round_idx),
@@ -207,7 +223,7 @@ class FedAvgAPI(object):
 
     def train_one_round(self, round_idx, w_global):
         logging.info("################Communication round : {}".format(round_idx))
-
+        print('啦啦啦我是生成假梯度的轮次。。。无语了'+str(self.args.synthetic_data_generation_round))
         w_locals = []
         w_save = []      
 
@@ -220,16 +236,23 @@ class FedAvgAPI(object):
             client = self.client_list[idx]
             w = client.train(copy.deepcopy(w_global))
             w_locals.append((client.get_sample_number(), copy.deepcopy(w)))
+        ##print('啦啦啦我是local模型'+str(w_locals))
+        1.##聚合生成新的全局模型 先生成W_c+1
+        w_global = self._aggregate(w_locals, round_idx)
+        self.model_trainer.set_model_params(w_global)
 
         # 存储全局模型参数
         self.global_model_trajectory.append(copy.deepcopy(w_global))
-
+       
         # 在指定轮次生成合成数据和公平梯度
         if round_idx == self.args.synthetic_data_generation_round:
             synthesizer = DataSynthesizer(self.args)
             self.synthetic_data, self.synthetic_labels, self.synthetic_sensitive_attr = synthesizer.synthesize(self.global_model_trajectory)
-        
-            # 确保合成数据在正确的设备上
+            ##print('啦啦啦我是假数据'+str(self.synthetic_data))
+        # 从生成公平梯度后的轮次开始使用
+        if round_idx >= self.args.synthetic_data_generation_round:
+            # 将公平梯度添加到 w_locals
+            print('啦啦啦我是假梯度额外的步骤我运行了'+str(self.args.synthetic_data_generation_round))
             device = next(self.model_trainer.model.parameters()).device
             self.synthetic_data = self.synthetic_data.to(device)
             self.synthetic_labels = self.synthetic_labels.to(device)
@@ -239,22 +262,11 @@ class FedAvgAPI(object):
                 self.model_trainer.model,
                 (self.synthetic_data, self.synthetic_labels, self.synthetic_sensitive_attr),
                 learning_rate=self.args.learning_rate,
-                num_iterations=self.args.num_iterations
             )
-            logging.info(f"Synthetic data size: {len(self.synthetic_data)}")
-            logging.info(f"Fair gradient generated: {self.fair_gradient is not None}")
-
-        # 从生成公平梯度后的轮次开始使用
-        if round_idx >= self.args.synthetic_data_generation_round and self.fair_gradient is not None:
-            # 将公平梯度添加到 w_locals
-                logging.info("Adding fair gradient to aggregation")
-                device = next(self.model_trainer.model.parameters()).device
-                fair_gradient = {k: v.to(device) for k, v in self.fair_gradient.items()}
-                w_locals.append((len(self.synthetic_data), fair_gradient))
-
-        w_global = self._aggregate(w_locals, round_idx)
-        self.model_trainer.set_model_params(w_global)
-
+            fair_gradient = {k: v.to(device) for k, v in self.fair_gradient.items()}
+            ##print('啦啦啦我是公平梯度'+str(fair_gradient))
+            self.model_trainer.set_model_params(fair_gradient)
+    
         if round_idx % self.args.save_epoches == 0:
             torch.save(
                 self.model_trainer.model.state_dict(),
@@ -275,9 +287,8 @@ class FedAvgAPI(object):
             or round_idx % self.args.frequency_of_the_test == 0
         ):
             self._local_test_on_all_clients(round_idx)
-
-       
-
+        ##print('啦啦啦我是全局参数'+str(w_global))
+        ##全局参数正常，在变化
         return w_global
 
     def _client_sampling(self, round_idx, client_num_in_total, client_num_per_round):
@@ -305,14 +316,14 @@ class FedAvgAPI(object):
             training_num += sample_num
 
         (sample_num, averaged_params) = w_locals[0]
-        device = next(iter(averaged_params.values())).device
-
         for k in averaged_params.keys():
-            averaged_params[k] = averaged_params[k].to(device)
-            for i in range(1, len(w_locals)):
+            for i in range(0, len(w_locals)):
                 local_sample_number, local_model_params = w_locals[i]
                 w = local_sample_number / training_num
-                averaged_params[k] += local_model_params[k].to(device) * w
+                if i == 0:
+                    averaged_params[k] = local_model_params[k] * w
+                else:
+                    averaged_params[k] += local_model_params[k] * w
 
         return averaged_params
         def _aggregate_noniid_avg(self, w_locals):
@@ -333,7 +344,7 @@ class FedAvgAPI(object):
 
     def _local_test_on_all_clients(self, round_idx):
         logging.info("################local_test_on_all_clients : {}".format(round_idx))
-
+       
         train_metrics = {
             "num_samples": [],
             "num_correct": [],
@@ -383,7 +394,6 @@ class FedAvgAPI(object):
             )
             test_metrics["eo_gap"].append(copy.deepcopy(test_local_metrics["eo_gap"]))
             test_metrics["dp_gap"].append(copy.deepcopy(test_local_metrics["dp_gap"]))
-
         # test on training dataset
         train_acc = sum(train_metrics["num_correct"]) / sum(
             train_metrics["num_samples"]
@@ -391,7 +401,7 @@ class FedAvgAPI(object):
         train_loss = sum(train_metrics["losses"]) / sum(train_metrics["num_samples"])
         train_dp_gap = sum(train_metrics["dp_gap"]) / len(self.args.users)
         train_eo_gap = sum(train_metrics["eo_gap"]) / len(self.args.users)
-
+        ##print(train_metrics)
         # test on test dataset
         test_acc = sum(test_metrics["num_correct"]) / sum(test_metrics["num_samples"])
         test_loss = sum(test_metrics["losses"]) / sum(test_metrics["num_samples"])
@@ -414,6 +424,11 @@ class FedAvgAPI(object):
             wandb.log({"Test/Loss": test_loss, "round": round_idx})
             wandb.log({"Train/Acc": train_acc, "round": round_idx})
             wandb.log({"Train/Loss": train_loss, "round": round_idx})
+        self.acc_list_all_round.append(test_acc)
+        self.eo_list_all_round.append(test_eo_gap)
+        self.dp_list_all_round.append(test_dp_gap)
+        logging.info( "准确性list: {} eo list: {}, dp list: {}".format(
+            self.acc_list_all_round, self.eo_list_all_round, self.dp_list_all_round))
 
     def _local_test_on_validation_set(self, round_idx):
         logging.info(
@@ -455,7 +470,9 @@ class FedAvgAPI(object):
             raise Exception(
                 "Unknown format to log metrics for dataset {}!" % self.args.dataset
             )
-
+        
+        logging.info( "准确性list: {} eo list: {}, dp list: {}".format(
+                self.acc_list_all_round, self.eo_list_all_round, self.dp_list_all_round))
         logging.info(stats)
 
     def save(self):

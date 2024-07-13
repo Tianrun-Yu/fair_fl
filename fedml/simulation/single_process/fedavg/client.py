@@ -37,9 +37,11 @@ class Client:
         return self.local_sample_number
 
     def train(self, w_global):
+        ##print('啦啦啦我是local模型我train了')
         self.model_trainer.set_model_params(w_global)
         self.model_trainer.train(self.local_training_data, self.device, self.args)
         weights = self.model_trainer.get_model_params()
+        ##print('啦啦啦我是local模型的参数'+str(weights))
         return weights
 
     def local_test(self, b_use_test_dataset, b_use_val_dataset=False):

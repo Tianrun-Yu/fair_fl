@@ -50,7 +50,6 @@ def load_data(args):
     return dataset, class_num
 
 
-
 def main():
     # init FedML framework
     args = fedml.init()
@@ -62,54 +61,22 @@ def main():
     dataset, output_dim = load_data(args)
     print("load dataset time {}".format(time.time() - start_time))
     if args.model == "two-layer":
+        """
         model = TwoNN(
             input_dim=args.input_dim,
             hidden_outdim=args.num_hidden,  # 注意这里使用 num_hidden
             output_dim=args.output_dim
         )
+        """
+        model = TwoNN(census_input_shape_dict[args.task], args.num_hidden, output_dim)
     trainer = StandardTrainer(model)
     print("load model time {}".format(time.time() - start_time))
 
     # 设置合成数据生成的轮次
-    args.synthetic_data_generation_round = args.comm_round // 2
+   ##args.synthetic_data_generation_round = args.comm_round // 2
 
     simulator = Simulator(args, device, dataset, model, trainer)
-    w_global = simulator.fl_trainer.model_trainer.get_model_params()
-
-    # 存储全局模型轨迹
-    global_model_trajectory = []
-
-    for round_idx in range(args.comm_round):
-        w_global = simulator.fl_trainer.train_one_round(round_idx, w_global)
-
-        # 存储全局模型参数
-        global_model_trajectory.append(copy.deepcopy(simulator.fl_trainer.model_trainer.model.state_dict()))
-
-        # 在指定轮次生成合成数据和公平梯度
-        if round_idx == args.synthetic_data_generation_round:
-            # 生成合成数据
-            synthesizer = DataSynthesizer(args)
-            synthetic_data, synthetic_labels, synthetic_sensitive_attr = synthesizer.synthesize(
-                global_model_trajectory,
-                n_iterations=args.n_iterations
-            )
-
-            # 生成公平梯度
-            fair_gradient = simulator.fl_trainer.generate_fair_gradient(
-                simulator.fl_trainer.model_trainer.model,
-                (synthetic_data, synthetic_labels, synthetic_sensitive_attr),
-                learning_rate=args.learning_rate,
-                num_iterations=args.num_iterations
-            )
-
-            # 将公平梯度添加到 FedAvgAPI 中
-            simulator.fl_trainer.fair_gradient = fair_gradient
-
-        # 从生成公平梯度后的轮次开始使用
-        if round_idx > args.synthetic_data_generation_round:
-            # 在 FedAvgAPI 中，公平梯度会自动被添加到聚合过程中
-            pass
-
+    simulator.run()
     simulator.fl_trainer.save()
     print("finishing time {}".format(time.time() - start_time))
     torch.save(

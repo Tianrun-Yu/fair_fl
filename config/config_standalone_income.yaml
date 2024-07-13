@@ -19,6 +19,8 @@ model_args:
   model: "two-layer"
   num_hidden: 32
   save_model_name: "standalone"
+  input_dim: 54  # income 数据集的特征数量
+  output_dim: 2  # income 是二分类问题
 train_args:
   federated_optimizer: "Local" #Local (FL or standalone training)
   client_id_list: "[]"

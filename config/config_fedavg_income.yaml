@@ -9,7 +9,7 @@ tracking_args:
   wandb_entity: None
   wandb_project: None
   run_name: "fedavg"
-  save_epoches: 20 # save the snapshot of the model
+  save_epoches: 200 # save the snapshot of the model
 
 data_args:
   partition: "1000_2000_2000" # train test val
@@ -32,7 +32,7 @@ train_args:
   users: "[]"
   client_num_in_total: 51
   client_num_per_round: 51
-  comm_round: 20
+  comm_round: 200
   epochs: 1
   batch_size: 32
   client_optimizer: sgd
@@ -56,5 +56,5 @@ synthetic_data_args:
   learning_rate: 0.01  # 改名为 learning_rate 以保持一致性
   n_iterations: 1000
   local_ep: 5  # 使用合成数据进行本地训练的轮数
-  num_iterations: 10  # 生成公平梯度的迭代次数
-  synthetic_data_generation_round: 10  # 生成合成数据和公平梯度的轮次
+  num_iterations: 50  # 生成公平梯度的迭代次数
+  synthetic_data_generation_round: 50  # 生成合成数据和公平梯度的轮次
