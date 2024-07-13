@@ -49,7 +49,7 @@ To get the results on other datasets (e.g., Health, Employment), run the `main.p
 Run the following command to get the performance of the models for plotting figures:
 
 ```
-python save_information.py --task income
+python saved_information.py --task income
 ```
 
 By default, the script collects the prediction information from 5 runs with random seeds 0 to

@@ -276,7 +276,7 @@ class FedAvgAPI(object):
         ):
             self._local_test_on_all_clients(round_idx)
 
-       # self.global_model_trajectory.append(copy.deepcopy({k: v.cpu() for k, v in w_global.items()}))
+       
 
         return w_global
 
