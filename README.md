@@ -1,8 +1,4 @@
-# Bias Propagation in Federated Learning
 
-This is the code repository for the paper titled [Bias Propagation in Federated Learning](https://openreview.net/forum?id=V7CYzdruWdm) which was accepted to the International Conference on Learning Representations (ICLR) 2023.
-
-If you have any questions, feel free to email Hongyan (hongyan@comp.nus.edu.sg).
 
 ## Introduction
 
