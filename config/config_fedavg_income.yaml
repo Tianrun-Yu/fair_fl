@@ -53,8 +53,8 @@ comm_args:
 
 synthetic_data_args:
   synthetic_data_size: 1000
-  learning_rate: 0.01  # 改名为 learning_rate 以保持一致性
+  learning_rate: 0.1  # 改名为 learning_rate 以保持一致性
   n_iterations: 1000
-  local_ep: 5  # 使用合成数据进行本地训练的轮数
-  num_iterations: 50  # 生成公平梯度的迭代次数
-  synthetic_data_generation_round: 50  # 生成合成数据和公平梯度的轮次
+  local_ep: 50  # 使用合成数据进行本地训练的轮数
+  num_iterations: 100  # 生成公平梯度的迭代次数
+  synthetic_data_generation_round: 100  # 生成合成数据和公平梯度的轮次

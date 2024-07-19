@@ -45,6 +45,7 @@ class FedAvgAPI(object):
         self.train_data_local_dict = train_data_local_dict
         self.test_data_local_dict = test_data_local_dict
         self.val_data_local_dict = val_data_local_dict
+        self.global_dataset = train_data_global.dataset  #  train_data_global 是一个 DataLoader
 
         logging.info("model = {}".format(model))
         if model_trainer is None:
@@ -95,33 +96,93 @@ class FedAvgAPI(object):
         logging.info("############setup_clients (END)#############")
 
 
+    # def calculate_eo_loss(self, model, data, labels, sensitive_attributes):
+    #     outputs = model(data)
+    #     # 获取每个参数的梯度
+    #     """""
+    #     for name, param in model.named_parameters():
+    #         print(f"Parameter name: {name}")
+    #         print(param)
+    #     """""
+        
+    #     probs = torch.sigmoid(outputs)
+    #     ##print('啦啦啦我是敏感属性'+str(sensitive_attributes))
+    #     pos_mask = (labels == 1)
+    #     group_0_mask = (sensitive_attributes == 0) & pos_mask
+    #     group_1_mask = (sensitive_attributes == 1) & pos_mask
+    #     ##print('啦啦啦我是概率'+str(probs))
+    #     avg_prob_0 = probs[group_0_mask].mean()
+    #     avg_prob_1 = probs[group_1_mask].mean()
+    #     print('啦啦啦我是0的平均'+ str(avg_prob_0)+'啦啦啦我是1的平均'+str(avg_prob_1) )
+    #     return torch.abs(avg_prob_0 - avg_prob_1)
     def calculate_eo_loss(self, model, data, labels, sensitive_attributes):
         outputs = model(data)
-        # 获取每个参数的梯度
-        """""
-        for name, param in model.named_parameters():
-            print(f"Parameter name: {name}")
-            print(param)
-        """""
-        
-        probs = torch.sigmoid(outputs)
-        ##print('啦啦啦我是敏感属性'+str(sensitive_attributes))
+        probs = torch.sigmoid(outputs).squeeze()
+    
         pos_mask = (labels == 1)
         group_0_mask = (sensitive_attributes == 0) & pos_mask
         group_1_mask = (sensitive_attributes == 1) & pos_mask
-        ##print('啦啦啦我是概率'+str(probs))
-        avg_prob_0 = probs[group_0_mask].mean()
-        avg_prob_1 = probs[group_1_mask].mean()
-        print('啦啦啦我是0的平均'+ str(avg_prob_0)+'啦啦啦我是1的平均'+str(avg_prob_1) )
-        return torch.abs(avg_prob_0 - avg_prob_1)
+    
+        print(f"Positive samples: {pos_mask.sum().item()}")
+        print(f"Group 0 positive samples: {group_0_mask.sum().item()}")
+        print(f"Group 1 positive samples: {group_1_mask.sum().item()}")
+
+        # 添加小的 epsilon 值以避免除以零
+        epsilon = 1e-8
+        avg_prob_0 = (probs[group_0_mask].sum() + epsilon) / (group_0_mask.sum() + epsilon)
+        avg_prob_1 = (probs[group_1_mask].sum() + epsilon) / (group_1_mask.sum() + epsilon)
+    
+        print(f"Average probability for group 0: {avg_prob_0.item()}")
+        print(f"Average probability for group 1: {avg_prob_1.item()}")
+
+        eo_loss = torch.abs(avg_prob_0 - avg_prob_1)
+        print(f"EO loss: {eo_loss.item()}")
+
+        return eo_loss
+    
+    def calculate_dp_loss(self, model, data, labels, sensitive_attributes):
+        outputs = model(data)
+        probs = torch.sigmoid(outputs).squeeze()
+
+        group_0_mask = (sensitive_attributes == 0)
+        group_1_mask = (sensitive_attributes == 1)
+
+        print(f"Total samples: {len(data)}")
+        print(f"Group 0 samples: {group_0_mask.sum().item()}")
+        print(f"Group 1 samples: {group_1_mask.sum().item()}")
+
+        # 添加小的 epsilon 值以避免除以零
+        epsilon = 1e-8
+        avg_prob_0 = (probs[group_0_mask].sum() + epsilon) / (group_0_mask.sum() + epsilon)
+        avg_prob_1 = (probs[group_1_mask].sum() + epsilon) / (group_1_mask.sum() + epsilon)
+
+        print(f"Average probability for group 0: {avg_prob_0.item()}")
+        print(f"Average probability for group 1: {avg_prob_1.item()}")
+
+        dp_loss = torch.abs(avg_prob_0 - avg_prob_1)
+        print(f"DP loss: {dp_loss.item()}")
+
+        return dp_loss
+    
     def generate_fair_gradient(self, model, synthetic_data, learning_rate=0.1):
         x, y, sensitive_attr = synthetic_data
         device = next(model.parameters()).device  # Get the device where the model resides
-
+        print('啦啦啦我是x'+str(x)+'啦啦啦我是y'+str(y))
+        print('啦啦啦我是x的shape:', x.shape)
+        print('啦啦啦我是y的shape:', y.shape)
+        print('啦啦啦我是sensitive_attr的shape:', sensitive_attr.shape)
+        print('啦啦啦我是x的前5个样本:', x[:5])
+        print('啦啦啦我是y的前20个标签:', y[:20])
+        print('啦啦啦我是sensitive_attr的前20个值:', sensitive_attr[:20])
         # Ensure all data is on the correct device
         x = x.to(device)
         y = y.to(device)
         sensitive_attr = sensitive_attr.to(device)
+
+        print('数据是否包含NaN:')
+        print('x:', torch.isnan(x).any().item())
+        print('y:', torch.isnan(y).any().item())
+        print('sensitive_attr:', torch.isnan(sensitive_attr).any().item())
 
         # Create a temporary model for a single gradient descent step
         temp_model = type(model)(
@@ -136,26 +197,39 @@ class FedAvgAPI(object):
     
         
         eo_loss = self.calculate_eo_loss(temp_model, x, y, sensitive_attr)
-        ##print('啦啦啦啦我是eo的loss，看看我爆炸没+'f'EO Loss: {eo_loss.item()}')
+        dp_loss = self.calculate_dp_loss(temp_model, x, y, sensitive_attr)
+
+        combined_loss = 0 * eo_loss + (1 - 0) * dp_loss
+        print('啦啦啦啦我是eo的loss，看看我爆炸没+'f'EO Loss: {combined_loss.item()}')
 
 
         # Backward pass and update model
         optimizer.zero_grad()  # Clear gradients
-        eo_loss.backward()
+        combined_loss.backward()
         optimizer.step()
+
+
         for name, param in temp_model.named_parameters():
             print('啦啦啦我是梯度更新关于公平的')
             print(f'Gradient - {name}:')
             print(param.grad)
+
+            if param.grad is not None:
+                print(f'  Mean: {param.grad.mean().item()}, Std: {param.grad.std().item()}')
+                print(f'  Min: {param.grad.min().item()}, Max: {param.grad.max().item()}')
+                print(f'  Contains NaN: {torch.isnan(param.grad).any().item()}')
+            else:
+                print('  Gradient is None')
+
         # Return gradients of updated model parameters as a dictionary
         return {name: param.clone().detach() for name, param in temp_model.named_parameters()}
-    
+
     def train(self):
         logging.info("self.model_trainer = {}".format(self.model_trainer))
         w_global = self.model_trainer.get_model_params()
         for round_idx in range(self.args.comm_round):
             logging.info("################Communication round : {}".format(round_idx))
-            self.global_model_trajectory.append(copy.deepcopy(w_global))
+            # self.global_model_trajectory.append(copy.deepcopy(w_global))
             w_locals = []
 
             """
@@ -180,10 +254,31 @@ class FedAvgAPI(object):
             # 在指定轮次生成合成数据和公平梯度
             if round_idx == self.args.synthetic_data_generation_round:
                 synthesizer = DataSynthesizer(self.args)
-                self.synthetic_data, self.synthetic_labels, self.synthetic_sensitive_attr = synthesizer.synthesize(self.global_model_trajectory)
-                ##print('啦啦啦我是假数据'+str(self.synthetic_data))
+                self.synthetic_data, self.synthetic_labels, self.synthetic_sensitive_attr = synthesizer.synthesize(self.global_dataset)
+                print('啦啦啦我是假数据'+str(self.synthetic_data))
             # 从生成公平梯度后的轮次开始使用
             if round_idx >= self.args.synthetic_data_generation_round:
+                if self.fair_gradient is None:
+                    print("Fair gradient is None. Skipping fair gradient aggregation.")
+                else:
+                    print("Checking fair gradient before adding to aggregation:")
+        
+                    for name, grad in self.fair_gradient.items():
+                        print(f"Gradient stats for {name}:")
+                        print(f"  Mean: {grad.mean().item()}, Std: {grad.std().item()}")
+                        print(f"  Min: {grad.min().item()}, Max: {grad.max().item()}")
+                        print(f"  Contains NaN: {torch.isnan(grad).any().item()}")
+    
+                # 如果梯度不全为零，则添加到聚合中
+                    if any(torch.any(grad != 0) for grad in self.fair_gradient.values()):
+                        fair_gradient_weight = 6  # 设置公平梯度的权重
+                        for _ in range(fair_gradient_weight):
+                            logging.info("Adding fair gradient to aggregation")
+                            w_locals.append((len(self.synthetic_data), self.fair_gradient))
+                    else:
+                        logging.warning("Fair gradient is all zeros, not adding to aggregation")
+
+
                 # 将公平梯度添加到 w_locals
                 print('啦啦啦我是假梯度额外的步骤我运行了'+str(self.args.synthetic_data_generation_round))
                 device = next(self.model_trainer.model.parameters()).device
@@ -241,13 +336,13 @@ class FedAvgAPI(object):
         w_global = self._aggregate(w_locals, round_idx)
         self.model_trainer.set_model_params(w_global)
 
-        # 存储全局模型参数
-        self.global_model_trajectory.append(copy.deepcopy(w_global))
+        # # 存储全局模型参数
+        # self.global_model_trajectory.append(copy.deepcopy(w_global))
        
         # 在指定轮次生成合成数据和公平梯度
         if round_idx == self.args.synthetic_data_generation_round:
             synthesizer = DataSynthesizer(self.args)
-            self.synthetic_data, self.synthetic_labels, self.synthetic_sensitive_attr = synthesizer.synthesize(self.global_model_trajectory)
+            self.synthetic_data, self.synthetic_labels, self.synthetic_sensitive_attr = synthesizer.synthesize(self.global_dataset)
             ##print('啦啦啦我是假数据'+str(self.synthetic_data))
         # 从生成公平梯度后的轮次开始使用
         if round_idx >= self.args.synthetic_data_generation_round:
@@ -263,6 +358,7 @@ class FedAvgAPI(object):
                 (self.synthetic_data, self.synthetic_labels, self.synthetic_sensitive_attr),
                 learning_rate=self.args.learning_rate,
             )
+
             fair_gradient = {k: v.to(device) for k, v in self.fair_gradient.items()}
             ##print('啦啦啦我是公平梯度'+str(fair_gradient))
             self.model_trainer.set_model_params(fair_gradient)
