@@ -1,7 +1,7 @@
 log/*
 results/*
 .vscode/*
-/data/
+data/*
 /__pycache__/
 # Python相关
 *.pyc
