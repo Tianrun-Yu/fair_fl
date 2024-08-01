@@ -57,4 +57,4 @@ synthetic_data_args:
   n_iterations: 1000
   local_ep: 50  # 使用合成数据进行本地训练的轮数
   num_iterations: 100  # 生成公平梯度的迭代次数
-  synthetic_data_generation_round: 100  # 生成合成数据和公平梯度的轮次
+  synthetic_data_generation_round: 10  # 生成合成数据和公平梯度的轮次

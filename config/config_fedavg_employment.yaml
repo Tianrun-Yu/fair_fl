@@ -20,6 +20,8 @@ model_args:
   model: "two-layer"
   num_hidden: 64
   save_model_name: "fedavg"
+  input_dim: 109
+  output_dim: 2
 train_args:
   federated_optimizer: "FedAvg" #Local (FL or standalone training)
   client_id_list: "[]"
@@ -41,3 +43,14 @@ device_args:
   gpu_id: 0
 comm_args:
   backend: "single_process"
+
+comm_args:
+  backend: "single_process"
+
+  synthetic_data_args:
+  synthetic_data_size: 1000
+  learning_rate: 0.1  # 改名为 learning_rate 以保持一致性
+  n_iterations: 1000
+  local_ep: 50  # 使用合成数据进行本地训练的轮数
+  num_iterations: 100  # 生成公平梯度的迭代次数
+  synthetic_data_generation_round: 100  # 生成合成数据和公平梯度的轮次

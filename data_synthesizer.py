@@ -141,7 +141,7 @@ class DataSynthesizer:
 
         # If sensitive_attr is 2D, take the first column
         if synthetic_sensitive_attr.dim() > 1:
-            synthetic_sensitive_attr = synthetic_sensitive_attr[:, 0]
+            synthetic_sensitive_attr = synthetic_sensitive_attr[:, 1]
 
         print(f"Sampled data shape: {synthetic_data.shape}")
         print(f"Sampled labels shape: {synthetic_labels.shape}")

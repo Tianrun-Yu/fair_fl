@@ -1,34 +1,54 @@
 #!/bin/bash
 
-# 检查是否提供了参数
-if [ $# -eq 0 ]; then
-    echo "Using: $0 <f|c|s>"
-    echo "  f: Run FedAvg Income config"
-    echo "  c: Run Centralized Income config"
-    echo "  s: Run Standalone Income config"
+# 检查是否提供了足够的参数
+if [ $# -ne 2 ]; then
+    echo "Usage: $0 <f|c|s> <income|health|employment>"
+    echo "  First parameter:"
+    echo "    f: Run FedAvg config"
+    echo "    c: Run Centralized config"
+    echo "    s: Run Standalone config"
+    echo "  Second parameter:"
+    echo "    income: Use Income dataset"
+    echo "    health: Use Health dataset"
+    echo "    employment: Use Employment dataset"
+    exit 1
+fi
+
+# 设置模式和数据集
+mode=$1
+dataset=$2
+
+# 验证数据集参数
+if [[ ! "$dataset" =~ ^(income|health|employment)$ ]]; then
+    echo "Invalid dataset. Please use 'income', 'health', or 'employment'."
     exit 1
 fi
 
 # 根据输入参数运行相应的命令
-case $1 in
+case $mode in
     f)
-        echo "Run FedAvg Income config..."
-        python main.py --cf config/config_fedavg_income.yaml
+        echo "Running FedAvg $dataset config..."
+        python main.py --cf config/config_fedavg_${dataset}.yaml
         ;;
     c)
-        echo "Run Centralized Income config..."
-        python main.py --cf config/config_centralized_income.yaml
+        echo "Running Centralized $dataset config..."
+        python main.py --cf config/config_centralized_${dataset}.yaml
         ;;
     s)
-        echo "Run Standalone Income config..."
-        python main.py --cf config/config_standalone_income.yaml
+        echo "Running Standalone $dataset config..."
+        python main.py --cf config/config_standalone_${dataset}.yaml
         ;;
     *)
-        echo "Error"
-        echo "Using: $0 <f|c|s>"
-        echo "  f: Run FedAvg Income config"
-        echo "  c: Run Centralized Income config"
-        echo "  s: Run Standalone Income config"
+        echo "Error: Invalid mode"
+        echo "Usage: $0 <f|c|s> <income|health|employment>"
+        echo "  First parameter:"
+        echo "    f: Run FedAvg config"
+        echo "    c: Run Centralized config"
+        echo "    s: Run Standalone config"
+        echo "  Second parameter:"
+        echo "    income: Use Income dataset"
+        echo "    health: Use Health dataset"
+        echo "    employment: Use Employment dataset"
         exit 1
         ;;
 esac

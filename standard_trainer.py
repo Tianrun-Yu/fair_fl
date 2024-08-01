@@ -17,6 +17,15 @@ def replace_nan_with_zero(x):
         x[torch.isnan(x)] = 0
     return x
 
+def calculate_con(x_array, prob_array, k=5):
+    from sklearn.neighbors import NearestNeighbors
+    nn = NearestNeighbors(n_neighbors=k+1, metric='euclidean')
+    nn.fit(x_array)
+    distances, indices = nn.kneighbors(x_array)
+    neighbor_probs = prob_array[indices[:, 1:]]  # 排除自身
+    con = np.mean(np.abs(prob_array[:, np.newaxis] - neighbor_probs))
+    return con
+
 class StandardTrainer(ClientTrainer):
     def get_model_params(self):
         return self.model.cpu().state_dict()
@@ -92,6 +101,7 @@ class StandardTrainer(ClientTrainer):
         s_list = []
         x_list = []
         pred_list = []
+        prob_list = [] 
 
         with torch.no_grad():
             for x, target, s in test_data:
@@ -107,8 +117,10 @@ class StandardTrainer(ClientTrainer):
                 loss = criterion(logits, target)
 
                 _, predicted = torch.max(logits, -1)
+                probs = torch.softmax(logits, dim=1)[:, 0]
                 correct = predicted.eq(target).sum()
                 pred_list.extend(predicted.detach().cpu().tolist())
+                prob_list.extend(probs.detach().cpu().tolist())
                 metrics["test_correct"] += correct.item()
                 metrics["test_loss"] += loss.item() * target.size(0)
                 metrics["test_total"] += target.size(0)
@@ -117,10 +129,13 @@ class StandardTrainer(ClientTrainer):
         s_list = np.array(s_list)
         x_list = np.array(x_list)
         pred_list = np.array(pred_list)
+        prob_list = np.array(prob_list)
         pred_acc = pred_list == target_list
         ppr_list = []
         tnr_list = []
         tpr_list = []
+        ba_list = []
+        cal_list = []
         converted_s = s_list[:, 1]  # sex, 1 attribute
         
         for s_value in np.unique(converted_s):
@@ -128,15 +143,27 @@ class StandardTrainer(ClientTrainer):
                 indexs0 = np.logical_and(target_list == 0, converted_s == s_value)
                 indexs1 = np.logical_and(target_list == 1, converted_s == s_value)
                 ppr_list.append(np.mean(pred_list[converted_s == s_value]))
+                tnr = np.mean(pred_acc[indexs0])
+                tpr = np.mean(pred_acc[indexs1])
                 tnr_list.append(np.mean(pred_acc[indexs0]))
                 tpr_list.append(np.mean(pred_acc[indexs1]))
+                ba_list.append((tnr + tpr) / 2)
+                group_probs = prob_list[converted_s == s_value]
+                group_targets = target_list[converted_s == s_value]
+                cal_list.append(np.mean(np.abs(group_probs - group_targets)))
         ##print('啦啦啦我是converted_s'+str(converted_s))
         ##print('啦啦啦我是pred_list'+str(pred_list))
         ##print('啦啦啦我是index0'+str(indexs0))
         eo_gap = max(max(tnr_list) - min(tnr_list), max(tpr_list) - min(tpr_list))
         dp_gap = max(ppr_list) - min(ppr_list)
+        ba_gap = max(ba_list) - min(ba_list)  
+        cal_gap = max(cal_list) - min(cal_list)
+        con = calculate_con(x_list, prob_list)
 
-        metrics["eo_gap"] = eo_gap
-        metrics["dp_gap"] = dp_gap
+        metrics["eo"] = eo_gap
+        metrics["dp"] = dp_gap
+        metrics["ba"] = ba_gap  # 新增
+        metrics["cal"] = cal_gap  # 新增
+        metrics["con"] = con
         ##print('啦啦啦我是test正确的个数'+str(metrics["test_correct"]))
         return metrics
