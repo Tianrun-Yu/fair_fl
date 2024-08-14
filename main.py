@@ -11,6 +11,7 @@ import copy
 import yaml
 from model import TwoNN
 from data_synthesizer import DataSynthesizer
+import argparse
 
 census_input_shape_dict = {"income": 54, "health": 154, "employment": 109}
 
@@ -48,11 +49,26 @@ def load_data(args):
         class_num,
     ]
     return dataset, class_num
+def add_custom_arguments(parser):
+    parser.add_argument('--aggregation_method', type=str, default='fedavg',
+                        choices=['fedavg', 'median', 'trimmed_mean'],
+                        help='Aggregation method to use')
 
 
 def main():
+    # 创建自定义参数解析器
+    custom_parser = argparse.ArgumentParser(add_help=False)
+    add_custom_arguments(custom_parser)
+    
+    # 先解析自定义参数
+    custom_args, _ = custom_parser.parse_known_args()
+
     # init FedML framework
     args = fedml.init()
+    # 将自定义参数添加到 args 对象中
+    args.aggregation_method = custom_args.aggregation_method
+
+
     args.run_folder = "results/{}/run_{}".format(args.task, args.random_seed)
     os.makedirs(args.data_cache_dir, exist_ok=True)
     pathlib.Path(args.run_folder).mkdir(parents=True, exist_ok=True)

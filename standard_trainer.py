@@ -4,6 +4,8 @@ from torch import nn
 from fedml.core.alg_frame.client_trainer import ClientTrainer
 import numpy as np
 import sys
+from sklearn.neighbors import NearestNeighbors
+from sklearn.impute import SimpleImputer
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.getcwd(), "../")))
 
@@ -17,11 +19,28 @@ def replace_nan_with_zero(x):
         x[torch.isnan(x)] = 0
     return x
 
+# def calculate_con(x_array, prob_array, k=5):
+#     from sklearn.neighbors import NearestNeighbors
+#     from sklearn.impute import SimpleImputer
+
+#     # 使用 SimpleImputer 处理 NaN 值
+#     imputer = SimpleImputer(strategy='mean')
+#     x_array_imputed = imputer.fit_transform(x_array)
+
+#     nn = NearestNeighbors(n_neighbors=k+1, metric='euclidean')
+#     nn.fit(x_array)
+#     distances, indices = nn.kneighbors(x_array)
+#     neighbor_probs = prob_array[indices[:, 1:]]  # 排除自身
+#     con = np.mean(np.abs(prob_array[:, np.newaxis] - neighbor_probs))
+#     return con
 def calculate_con(x_array, prob_array, k=5):
-    from sklearn.neighbors import NearestNeighbors
+    # 使用 SimpleImputer 处理 NaN 值
+    imputer = SimpleImputer(strategy='mean')
+    x_array_imputed = imputer.fit_transform(x_array)
+
     nn = NearestNeighbors(n_neighbors=k+1, metric='euclidean')
-    nn.fit(x_array)
-    distances, indices = nn.kneighbors(x_array)
+    nn.fit(x_array_imputed)  # 使用经过imputation的数据来fit
+    distances, indices = nn.kneighbors(x_array_imputed)  # 同样使用经过imputation的数据
     neighbor_probs = prob_array[indices[:, 1:]]  # 排除自身
     con = np.mean(np.abs(prob_array[:, np.newaxis] - neighbor_probs))
     return con
@@ -158,6 +177,9 @@ class StandardTrainer(ClientTrainer):
         dp_gap = max(ppr_list) - min(ppr_list)
         ba_gap = max(ba_list) - min(ba_list)  
         cal_gap = max(cal_list) - min(cal_list)
+
+        x_list = np.array(x_list)
+        prob_list = np.array(prob_list)
         con = calculate_con(x_list, prob_list)
 
         metrics["eo"] = eo_gap

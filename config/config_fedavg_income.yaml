@@ -9,7 +9,7 @@ tracking_args:
   wandb_entity: None
   wandb_project: None
   run_name: "fedavg"
-  save_epoches: 200 # save the snapshot of the model
+  save_epoches: 100 # save the snapshot of the model
 
 data_args:
   partition: "1000_2000_2000" # train test val
@@ -25,14 +25,16 @@ model_args:
   save_model_name: "fedavg"
   input_dim: 54  # income 数据集的特征数量
   output_dim: 2  # income 是二分类问题
-
+  model: "two-layer"
+  
 train_args:
   federated_optimizer: "FedAvg" #Local (FL or standalone training)
+  # aggregation_method: "median"  # 新增这一行，可选值为 "fedavg", "median", "trimmed_mean"
   client_id_list: "[]"
   users: "[]"
   client_num_in_total: 51
   client_num_per_round: 51
-  comm_round: 200
+  comm_round: 100
   epochs: 1
   batch_size: 32
   client_optimizer: sgd
@@ -40,6 +42,11 @@ train_args:
   weight_decay: 0.005
   cluster_num: 0
   run_folder: ""
+  no_of_adversaries: 2  # 预期的恶意客户端数量
+  trim_ratio: 0.1  # 用于 trimmed_mean 聚合方法
+  flame_m: 5  # Flame 聚合方法的参数
+  deepsight_window_size: 10  # Deepsight 聚合方法的窗口大小
+
 
 validation_args:
   frequency_of_the_test: 1
@@ -57,4 +64,4 @@ synthetic_data_args:
   n_iterations: 1000
   local_ep: 50  # 使用合成数据进行本地训练的轮数
   num_iterations: 100  # 生成公平梯度的迭代次数
-  synthetic_data_generation_round: 10  # 生成合成数据和公平梯度的轮次
+  synthetic_data_generation_round: 50  # 生成合成数据和公平梯度的轮次

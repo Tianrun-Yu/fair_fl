@@ -7,7 +7,6 @@ import numpy as np
 import torch
 import wandb
 import os
-import hdbscan
 from .client import Client
 from .my_model_trainer_classification import MyModelTrainer as MyModelTrainerCLS
 from .my_model_trainer_nwp import MyModelTrainer as MyModelTrainerNWP
@@ -22,10 +21,88 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import PercentFormatter
 
 
+# def calculate_gradients(fedavg_api, model, x, y, sensitive_attr):
+#     gradients = {}
+#     losses = {}
+
+#     # Accuracy loss
+#     accuracy_loss = fedavg_api.calculate_accuracy_loss(model, x, y)
+#     accuracy_loss.backward(retain_graph=True)
+#     gradients['accuracy'] = [p.grad.clone() for p in model.parameters() if p.grad is not None]
+#     losses['accuracy'] = accuracy_loss.item()
+#     model.zero_grad()
+
+#     # EO loss
+#     eo_loss = fedavg_api.calculate_eo_loss(model, x, y, sensitive_attr)
+#     eo_loss.backward(retain_graph=True)
+#     gradients['eo'] = [p.grad.clone() for p in model.parameters() if p.grad is not None]
+#     losses['eo'] = eo_loss.item()
+#     model.zero_grad()
+
+#     # DP loss
+#     dp_loss = fedavg_api.calculate_dp_loss(model, x, y, sensitive_attr)
+#     dp_loss.backward(retain_graph=True)
+#     gradients['dp'] = [p.grad.clone() for p in model.parameters() if p.grad is not None]
+#     losses['dp'] = dp_loss.item()
+#     model.zero_grad()
+
+#     # CON loss
+#     con_loss = fedavg_api.calculate_con_loss(model, x, y)
+#     con_loss.backward(retain_graph=True)
+#     gradients['con'] = [p.grad.clone() for p in model.parameters() if p.grad is not None]
+#     losses['con'] = con_loss.item()
+#     model.zero_grad()
+
+#     # BA loss
+#     ba_loss = fedavg_api.calculate_ba_loss(model, x, y, sensitive_attr)
+#     ba_loss.backward(retain_graph=True)
+#     gradients['ba'] = [p.grad.clone() for p in model.parameters() if p.grad is not None]
+#     losses['ba'] = ba_loss.item()
+#     model.zero_grad()
+
+#     # CAL loss
+#     cal_loss = fedavg_api.calculate_cal_loss(model, x, y, sensitive_attr)
+#     cal_loss.backward(retain_graph=True)
+#     gradients['cal'] = [p.grad.clone() for p in model.parameters() if p.grad is not None]
+#     losses['cal'] = cal_loss.item()
+#     model.zero_grad()
+
+#     return gradients, losses
+
+# def mgda_update(gradients, losses, model, optimizer, prev_losses=None):
+#     n_tasks = len(gradients)
+#     scale = np.zeros(n_tasks)
+    
+#     # Frank-Wolfe algorithm to find the optimal scaling
+#     for _ in range(20):  # number of iterations for Frank-Wolfe
+#         grad_prod = np.zeros(n_tasks)
+#         for i in range(n_tasks):
+#             for j in range(n_tasks):
+#                 grad_prod[i] += scale[j] * sum(
+#                     torch.sum(g_i * g_j) for g_i, g_j in zip(gradients[list(gradients.keys())[i]], gradients[list(gradients.keys())[j]])
+#                 ).item()
+        
+#         idx = np.argmin(grad_prod)
+#         gamma = 2.0 / (2.0 + _)
+#         scale = (1 - gamma) * scale
+#         scale[idx] += gamma
+    
+#     # Apply the scaling to the gradients
+#     for param in model.parameters():
+#         if param.grad is not None:
+#             param.grad.zero_()
+    
+#     for i, task in enumerate(gradients.keys()):
+#         for param, grad in zip(model.parameters(), gradients[task]):
+#             if param.grad is not None:
+#                 param.grad += scale[i] * grad
+    
+#     # Update the model
+#     optimizer.step()
+    
+#     return scale
 
 class FedAvgAPI(object):
-    aggregation_method = 'foolsgold' # median trimmed_mean fedavg flame multikrum foolsgold deepsight
-
     def __init__(self, args, device, dataset, model, model_trainer=None):
         self.device = device
         self.args = args
@@ -61,86 +138,6 @@ class FedAvgAPI(object):
         self.global_dataset = train_data_global.dataset  #  train_data_global 是一个 DataLoader
         self.fairness_optimizer = AdaptiveFairnessOptimizer(['eo', 'dp'], learning_rate=args.learning_rate, acc_threshold=0.01)
         self.metrics_history = {'acc': [], 'eo': [], 'dp': []}
-
-        self.global_model = model  
-
-        # self.aggregation_method = args.aggregation_method
-        self.perturbation = self.initialize_perturbation(model)
-
-        # 为 Flame 添加
-        self.flame_memory = {}
-        self.flame_m = args.flame_m  # Flame 参数，需要在 args 中定义
-        self.args.eta = getattr(self.args, 'eta', 0.1)  # 默认学习率为 0.1
-        self.args.noise_sigma = getattr(self.args, 'noise_sigma', 0.0)  # 默认不添加噪声
-        
-        # 为 Deepsight 添加
-        self.deepsight_memory = []
-        self.deepsight_window_size = args.deepsight_window_size  # Deepsight 参数，需要在 args 中定义
-
-        
-        # # 为 Foolsgold 添加
-        # self.update_history = []
-        # # 根据模型类型确定最后一层的名称
-        # if hasattr(args, 'model'):
-        #     if args.model == "two-layer":
-        #         self.last_layer_name = "linear"  # 假设两层网络的最后一层是线性层
-        #     else:
-        #         # 对于其他模型类型，您可能需要根据实际情况进行调整
-        #         self.last_layer_name = "linear"  # 默认使用 "linear"
-        # else:
-        #     # 如果 args 中没有 model 属性，我们使用一个默认值
-        #     self.last_layer_name = "linear"
-
-        # # 获取最后一层的权重和偏置
-        # if self.last_layer_name in model.state_dict():
-        #     last_weight = model.state_dict()[f"{self.last_layer_name}.weight"].detach().clone().view(-1)
-        #     last_bias = model.state_dict()[f"{self.last_layer_name}.bias"].detach().clone().view(-1)
-        #     last_params = torch.cat((last_weight, last_bias))
-        # else:
-        #     # 如果找不到指定的层，创建一个空的张量
-        #     logging.warning(f"Layer {self.last_layer_name} not found in the model. Using empty tensor for Foolsgold initialization.")
-        #     last_params = torch.zeros(1)
-
-        # for _ in range(args.client_num_in_total):
-        #     last_layer_params = torch.zeros_like(last_params)
-        #     self.update_history.append(last_layer_params)
-
-        # 为 Foolsgold 添加
-        self.update_history = []
-
-        # 根据模型类型确定最后一层的名称
-        if hasattr(args, 'model'):
-            self.model_type = args.model
-            if args.model == "two-layer":
-                self.last_layer_name = "fc2"  # 假设两层网络的最后一层是第二个全连接层
-            else:
-                # 对于其他模型类型，您可能需要根据实际情况进行调整
-                self.last_layer_name = "fc"  # 默认使用 "fc"
-        else:
-            # 如果 args 中没有 model 属性，我们使用一个默认值
-            self.model_type = "unknown"
-            self.last_layer_name = "fc"
-
-        # 输出并判断模型类型
-        logging.info(f"Model type: {self.model_type}")
-        logging.info(f"Last layer name: {self.last_layer_name}")
-
-        # 获取最后一层的权重和偏置
-        if self.last_layer_name in model.state_dict():
-            last_weight = model.state_dict()[f"{self.last_layer_name}.weight"].detach().clone().view(-1)
-            last_bias = model.state_dict()[f"{self.last_layer_name}.bias"].detach().clone().view(-1)
-            last_params = torch.cat((last_weight, last_bias))
-            logging.info(f"Last layer parameters shape: {last_params.shape}")
-        else:
-            # 如果找不到指定的层，创建一个空的张量
-            logging.warning(f"Layer {self.last_layer_name} not found in the model. Using empty tensor for Foolsgold initialization.")
-            last_params = torch.zeros(1)
-
-        # 初始化 update_history
-        for _ in range(args.client_num_in_total):
-            self.update_history.append(torch.zeros_like(last_params))
-
-        self.no_of_adversaries = args.no_of_adversaries  # 需要在 args 中定义
 
         logging.info("model = {}".format(model))
         if model_trainer is None:
@@ -191,6 +188,25 @@ class FedAvgAPI(object):
         logging.info("############setup_clients (END)#############")
 
 
+    # def calculate_eo_loss(self, model, data, labels, sensitive_attributes):
+    #     outputs = model(data)
+    #     # 获取每个参数的梯度
+    #     """""
+    #     for name, param in model.named_parameters():
+    #         print(f"Parameter name: {name}")
+    #         print(param)
+    #     """""
+        
+    #     probs = torch.sigmoid(outputs)
+    #     ##print('啦啦啦我是敏感属性'+str(sensitive_attributes))
+    #     pos_mask = (labels == 1)
+    #     group_0_mask = (sensitive_attributes == 0) & pos_mask
+    #     group_1_mask = (sensitive_attributes == 1) & pos_mask
+    #     ##print('啦啦啦我是概率'+str(probs))
+    #     avg_prob_0 = probs[group_0_mask].mean()
+    #     avg_prob_1 = probs[group_1_mask].mean()
+    #     print('啦啦啦我是0的平均'+ str(avg_prob_0)+'啦啦啦我是1的平均'+str(avg_prob_1) )
+    #     return torch.abs(avg_prob_0 - avg_prob_1)
     def get_positive_class_probs(outputs, labels):
         probs = torch.softmax(outputs, dim=1)
         return probs[:, 0]
@@ -321,6 +337,62 @@ class FedAvgAPI(object):
         print(f"Accuracy: {accuracy.item():.4f}, Accuracy loss: {accuracy_loss.item():.4f}")
         return accuracy_loss
 
+    # def generate_fair_gradient(self, model, synthetic_data, learning_rate=0.1, num_epochs=10):
+    #     x, y, sensitive_attr = synthetic_data
+    #     device = next(model.parameters()).device
+    #     x, y, sensitive_attr = x.to(device), y.to(device), sensitive_attr.to(device)
+
+    #     print('Data shapes:')
+    #     print('x:', x.shape)
+    #     print('y:', y.shape)
+    #     print('sensitive_attr:', sensitive_attr.shape)
+    #     print('Sample data:')
+    #     print('x (first 5):', x[:5])
+    #     print('y (first 20):', y[:20])
+    #     print('sensitive_attr (first 20):', sensitive_attr[:20])
+    #     print('NaN check:')
+    #     print('x:', torch.isnan(x).any().item())
+    #     print('y:', torch.isnan(y).any().item())
+    #     print('sensitive_attr:', torch.isnan(sensitive_attr).any().item())
+
+    #     temp_model = type(model)(
+    #         input_dim=self.args.input_dim,
+    #         hidden_outdim=self.args.num_hidden,
+    #         output_dim=self.args.output_dim
+    #     ).to(device)
+    #     temp_model.load_state_dict(model.state_dict())
+
+    #     optimizer = torch.optim.Adam(temp_model.parameters(), lr=learning_rate)
+        
+    #     prev_losses = None
+    #     for epoch in range(num_epochs):
+    #         gradients, losses = calculate_gradients(self, temp_model, x, y, sensitive_attr)
+    #         scale = mgda_update(gradients, losses, temp_model, optimizer, prev_losses)
+            
+    #         print(f"Epoch {epoch + 1}")
+    #         for task, loss in losses.items():
+    #             print(f"  {task} Loss: {loss:.4f}, Scale: {scale[list(gradients.keys()).index(task)]:.4f}")
+            
+    #         prev_losses = losses
+
+    #     # Gradient clipping
+    #     torch.nn.utils.clip_grad_norm_(temp_model.parameters(), max_norm=1.0)
+
+    #     # Print final gradients
+    #     for name, param in temp_model.named_parameters():
+    #         if param.grad is not None:
+    #             print(f'Gradient - {name}:')
+    #             print(f'  Mean: {param.grad.mean().item():.4f}, Std: {param.grad.std().item():.4f}')
+    #             print(f'  Min: {param.grad.min().item():.4f}, Max: {param.grad.max().item():.4f}')
+    #             print(f'  Contains NaN: {torch.isnan(param.grad).any().item()}')
+    #         else:
+    #             print(f'Gradient - {name}: None')
+
+    #     # Compute the final gradient
+    #     final_gradient = {name: param.grad.clone() for name, param in temp_model.named_parameters() if param.grad is not None}
+        
+    #     return final_gradient
+
     def calculate_accuracy_loss(self, model, data, labels):
         outputs = model(data)
         loss = F.cross_entropy(outputs, labels)
@@ -342,13 +414,13 @@ class FedAvgAPI(object):
     def generate_fair_gradient(self, model, synthetic_data, learning_rate=0.1):
         x, y, sensitive_attr = synthetic_data
         device = next(model.parameters()).device  # Get the device where the model resides
-        # print('啦啦啦我是x'+str(x)+'啦啦啦我是y'+str(y))
-        # print('啦啦啦我是x的shape:', x.shape)
-        # print('啦啦啦我是y的shape:', y.shape)
-        # print('啦啦啦我是sensitive_attr的shape:', sensitive_attr.shape)
-        # print('啦啦啦我是x的前5个样本:', x[:5])
-        # print('啦啦啦我是y的前20个标签:', y[:20])
-        # print('啦啦啦我是sensitive_attr的前20个值:', sensitive_attr[:20])
+        print('啦啦啦我是x'+str(x)+'啦啦啦我是y'+str(y))
+        print('啦啦啦我是x的shape:', x.shape)
+        print('啦啦啦我是y的shape:', y.shape)
+        print('啦啦啦我是sensitive_attr的shape:', sensitive_attr.shape)
+        print('啦啦啦我是x的前5个样本:', x[:5])
+        print('啦啦啦我是y的前20个标签:', y[:20])
+        print('啦啦啦我是sensitive_attr的前20个值:', sensitive_attr[:20])
         # Ensure all data is on the correct device
         x = x.to(device)
         y = y.to(device)
@@ -372,12 +444,9 @@ class FedAvgAPI(object):
 
         # Define optimizer and calculate equal opportunity (eo) loss
         optimizer = torch.optim.Adam(temp_model.parameters(), lr=learning_rate)
+        # fairness_optimizer = AdaptiveFairnessOptimizer(fairness_metrics=['eo', 'dp'], learning_rate=learning_rate, acc_threshold=0.01)
 
-        # # 使用近似的公平梯度更新模型
-        # with torch.no_grad():
-        #     for name, param in temp_model.named_parameters():
-        #         if name in fair_gradient:
-        #             param.add_(fair_gradient[name])
+        # gradients = {}
     
         
         accuracy_loss = self.calculate_accuracy_loss(temp_model,x,y)
@@ -387,10 +456,34 @@ class FedAvgAPI(object):
         ba_loss = self.calculate_ba_loss(temp_model, x, y, sensitive_attr)
         cal_loss = self.calculate_cal_loss(temp_model, x, y, sensitive_attr)
 
-       
-        
+        # print("Optimization weights:", fairness_optimizer.optimization_weights)
+        # print(f"Accuracy loss: {accuracy_loss.item():.4f}")
+        # print(f"EO loss: {eo_loss.item():.4f}")
+        # print(f"DP loss: {dp_loss.item():.4f}")
+
+        # gradients = {
+        #     'acc': self._compute_gradient(accuracy_loss, temp_model),
+        #     'eo': self._compute_gradient(eo_loss, temp_model),
+        #     'dp': self._compute_gradient(dp_loss, temp_model)
+        # }
+
+        # current_metrics = {
+        #     'acc': 1-self.metrics_history['acc'][-1],
+        #     'eo': self.metrics_history['eo'][-1],
+        #     'dp': self.metrics_history['dp'][-1]
+        # }
+
+        # # Use AdaptiveFairnessOptimizer to get the final gradient
+        # fairness_optimizer.print_gradient_info(gradients)
+
+
+        # learning_rate = fairness_optimizer.get_learning_rate(current_metrics)
+        # final_gradient = fairness_optimizer.optimize(gradients, current_metrics)
         combined_loss = 1.5 * eo_loss + (1) * dp_loss  + 0.4*(accuracy_loss)
-        
+        # combined_loss = 0.4 * accuracy_loss + 0.2 * eo_loss + 0.3 * dp_loss + 0.05 * cal_loss + 0.05 * con_loss
+        # # print('啦啦啦啦我是eo的loss，看看我爆炸没+'f'EO Loss: {combined_loss.item()}')
+        # for k in final_gradient:
+        #     final_gradient[k] *= learning_rate
 
         # Backward pass and update model
         optimizer.zero_grad()  # Clear gradients
@@ -415,57 +508,38 @@ class FedAvgAPI(object):
         # Return gradients of updated model parameters as a dictionary
         return {name: param.clone().detach() for name, param in temp_model.named_parameters()}
 
+        # for name, grad in final_gradient.items():
+        #     torch.nn.utils.clip_grad_norm_(grad, max_norm=1.0)
+        # return {name: grad.clone().detach() for name, grad in final_gradient.items()}
+        # final_gradient = {name: param.grad.clone() for name, param in temp_model.named_parameters() if param.grad is not None}
+
+
+        # return final_gradient
+
+    # def _calculate_and_log_metrics(self, round_idx):
+    #     # 使用全局模型在合成数据上计算指标
+    #     model = self.model_trainer.model
+    #     x, y, sensitive_attr = self.synthetic_data, self.synthetic_labels, self.synthetic_sensitive_attr
         
-    def initialize_perturbation(self, model):
-        return {name: torch.randn_like(param) for name, param in model.named_parameters()}
-
-    def agr_update(self, w_locals, round_idx):
-        # 使用设定的聚合方法聚合模型参数
-        w_global = self._aggregate(w_locals, round_idx)
-
-        if round_idx >= self.args.synthetic_data_generation_round:
-            # 计算基准梯度 (∇^b)
-            base_gradient = self._fedavg_aggregate(w_locals)  # 使用FedAvg来计算基准梯度
-
-            # 优化 gamma
-            gamma_range = np.linspace(0, 2, 100)  # 可以根据需要调整范围和精度
-            best_gamma = 0
-            max_objective = float('-inf')
-
-            for gamma in gamma_range:
-                w_temp = {}
-                for k in w_global.keys():
-                    w_temp[k] = base_gradient[k] + gamma * self.perturbation[k]
-
-                # 使用当前聚合方法计算 f_agr
-                w_locals_temp = [(1, w_temp)] + w_locals[1:]  # 替换第一个客户端的梯度
-                aggregated_gradient = self._aggregate(w_locals_temp, round_idx)
-
-                # 计算目标函数值
-                objective = torch.norm(torch.cat([
-                    (base_gradient[k] - aggregated_gradient[k]).flatten() 
-                    for k in base_gradient.keys()
-                ]), p=2)
-
-                if objective > max_objective:
-                    max_objective = objective
-                    best_gamma = gamma
-
-            # 计算近似的公平梯度
-            fair_gradient = {k: best_gamma * self.perturbation[k] for k in w_global.keys()}
-
-            return fair_gradient
+    #     accuracy_loss = self.calculate_accuracy_loss(model, x, y)
+    #     eo_loss = self.calculate_eo_loss(model, x, y, sensitive_attr)
+    #     dp_loss = self.calculate_dp_loss(model, x, y, sensitive_attr)
         
-        return None
-
-    def calculate_objective(self, w_temp, w_global, x, y, sensitive_attr):
-        # 计算目标函数值，这里使用 L2 范数作为示例
-        diff = torch.cat([(w_temp[k] - w_global[k]).flatten() for k in w_global.keys()])
-        return torch.norm(diff, p=2).item()
-
+    #     self.metrics_history['acc'].append(accuracy_loss.item())
+    #     self.metrics_history['eo'].append(eo_loss.item())
+    #     self.metrics_history['dp'].append(dp_loss.item())
+        
+    #     print(f"Round {round_idx}: Accuracy Loss: {accuracy_loss.item():.4f}, EO Loss: {eo_loss.item():.4f}, DP Loss: {dp_loss.item():.4f}")
+        
+    #     # 更新 AdaptiveFairnessOptimizer 的历史记录
+    #     gradients = {
+    #         'acc': self._compute_gradient(accuracy_loss, model),
+    #         'eo': self._compute_gradient(eo_loss, model),
+    #         'dp': self._compute_gradient(dp_loss, model)
+    #     }
+    #     self.fairness_optimizer.update_angle_history(gradients)
 
     # def train(self):
-    #     logging.info(f"Using aggregation method: {self.aggregation_method}")
     #     logging.info("self.model_trainer = {}".format(self.model_trainer))
     #     w_global = self.model_trainer.get_model_params()
     #     for round_idx in range(self.args.comm_round):
@@ -484,44 +558,50 @@ class FedAvgAPI(object):
     #             w_locals.append((client.get_sample_number(), copy.deepcopy(w)))
     #             w_save.append(copy.deepcopy(w))
 
-    #         # 使用设定的聚合方法进行聚合
-    #         w_global = self._aggregate(w_locals, round_idx)
-
     #         # 在指定轮次生成合成数据
     #         if round_idx == self.args.synthetic_data_generation_round:
     #             synthesizer = DataSynthesizer(self.args)
     #             self.synthetic_data, self.synthetic_labels, self.synthetic_sensitive_attr = synthesizer.synthesize(self.global_dataset)
-    #             print('Synthetic data generated')
+    #             print('啦啦啦我是假数据'+str(self.synthetic_data))
 
-    #         # 从生成公平梯度后的轮次开始使用
     #         if round_idx >= self.args.synthetic_data_generation_round:
-    #             # 使用 AGR 更新方法生成近似公平梯度
-    #             fair_gradient = self.agr_update(w_locals, round_idx)
-                
-    #             if fair_gradient is not None:
-    #                 # 使用生成的公平梯度优化模型
-    #                 self.fair_gradient = self.generate_fair_gradient(
-    #                     self.model_trainer.model,
-    #                     (self.synthetic_data, self.synthetic_labels, self.synthetic_sensitive_attr),
-    #                     fair_gradient, learning_rate=self.args.learning_rate,
-    #                 )
-                    
-    #                 if self.fair_gradient is not None:
-    #                     print("Checking fair gradient before adding to aggregation:")
-    #                     for name, grad in self.fair_gradient.items():
-    #                         print(f"Gradient stats for {name}:")
-    #                         print(f"  Mean: {grad.mean().item()}, Std: {grad.std().item()}")
-    #                         print(f"  Min: {grad.min().item()}, Max: {grad.max().item()}")
-    #                         print(f"  Contains NaN: {torch.isnan(grad).any().item()}")
-                        
-    #                     if any(torch.any(grad != 0) for grad in self.fair_gradient.values()):
-    #                         logging.info("Adding fair gradient to aggregation")
-    #                         w_locals.append((len(self.synthetic_data), self.fair_gradient))
-    #                         # 再次使用设定的聚合方法进行聚合
-    #                         w_global = self._aggregate(w_locals, round_idx)
-    #                     else:
-    #                         logging.warning("Fair gradient is all zeros, not adding to aggregation")
+    #             self._calculate_and_log_metrics(round_idx) 
 
+    #         # 从指定轮次开始生成和应用公平梯度
+    #         if round_idx >= self.args.synthetic_data_generation_round:
+                
+                
+    #             device = next(self.model_trainer.model.parameters()).device
+    #             self.synthetic_data = self.synthetic_data.to(device)
+    #             self.synthetic_labels = self.synthetic_labels.to(device)
+    #             self.synthetic_sensitive_attr = self.synthetic_sensitive_attr.to(device)
+            
+    #             self.fair_gradient = self.generate_fair_gradient(
+    #                 self.model_trainer.model,
+    #                 (self.synthetic_data, self.synthetic_labels, self.synthetic_sensitive_attr),
+    #                 learning_rate=self.args.learning_rate,
+    #             )
+
+    #             # 应用公平梯度
+    #             fair_gradient_weight = 1
+    #             for name, param in self.model_trainer.model.named_parameters():
+    #                 if name in self.fair_gradient:
+    #                     if param.grad is None:
+    #                         param.grad = fair_gradient_weight * self.fair_gradient[name]
+    #                     else:
+    #                         param.grad += fair_gradient_weight * self.fair_gradient[name]
+
+    #             # 打印梯度统计信息
+    #             print("Checking fair gradient after applying:")
+    #             for name, param in self.model_trainer.model.named_parameters():
+    #                 if param.grad is not None:
+    #                     print(f"Gradient stats for {name}:")
+    #                     print(f"  Mean: {param.grad.mean().item()}, Std: {param.grad.std().item()}")
+    #                     print(f"  Min: {param.grad.min().item()}, Max: {param.grad.max().item()}")
+    #                     print(f"  Contains NaN: {torch.isnan(param.grad).any().item()}")
+
+    #         # 聚合梯度
+    #         w_global = self._aggregate(w_locals, round_idx)
     #         self.model_trainer.set_model_params(w_global)
 
     #         if round_idx % self.args.save_epoches == 0:
@@ -544,6 +624,8 @@ class FedAvgAPI(object):
     #             or round_idx % self.args.frequency_of_the_test == 0
     #         ):
     #             self._local_test_on_all_clients(round_idx)
+
+
 
     def train(self):
         logging.info("self.model_trainer = {}".format(self.model_trainer))
@@ -572,19 +654,6 @@ class FedAvgAPI(object):
                 w_save.append(copy.deepcopy(w))
 
             w_global = self._aggregate(w_locals, round_idx)
-
-            original_state_dict = self.model_trainer.get_model_params()
-            for k, v in w_global.items():
-                if k in original_state_dict:
-                    if v.shape != original_state_dict[k].shape:
-                        logging.warning(f"Shape mismatch for {k}: aggregated {v.shape}, original {original_state_dict[k].shape}")
-                        try:
-                            w_global[k] = v.view(original_state_dict[k].shape)
-                        except RuntimeError:
-                            logging.error(f"Cannot reshape {k} from {v.shape} to {original_state_dict[k].shape}")
-                            w_global[k] = original_state_dict[k]
-
-
             self.model_trainer.set_model_params(w_global)
 
             # 在指定轮次生成合成数据和公平梯度
@@ -656,6 +725,77 @@ class FedAvgAPI(object):
             ):
                 self._local_test_on_all_clients(round_idx)
 
+    # def train_one_round(self, round_idx, w_global):
+    #     logging.info("################Communication round : {}".format(round_idx))
+    #     print('啦啦啦我是生成假梯度的轮次。。。无语了'+str(self.args.synthetic_data_generation_round))
+    #     w_locals = []
+    #     w_save = []      
+
+    #     client_indexes = self._client_sampling(
+    #         round_idx, self.args.client_num_in_total, self.args.client_num_per_round
+    #     )
+    #     logging.info("client_indexes = " + str(client_indexes))
+
+    #     for idx, client_idx in enumerate(client_indexes):
+    #         client = self.client_list[idx]
+    #         w = client.train(copy.deepcopy(w_global))
+    #         w_locals.append((client.get_sample_number(), copy.deepcopy(w)))
+    #     ##print('啦啦啦我是local模型'+str(w_locals))
+    #     1.##聚合生成新的全局模型 先生成W_c+1
+    #     w_global = self._aggregate(w_locals, round_idx)
+    #     self.model_trainer.set_model_params(w_global)
+
+    #     # # 存储全局模型参数
+    #     # self.global_model_trajectory.append(copy.deepcopy(w_global))
+       
+    #     # 在指定轮次生成合成数据和公平梯度
+    #     if round_idx == self.args.synthetic_data_generation_round:
+    #         synthesizer = DataSynthesizer(self.args)
+    #         self.synthetic_data, self.synthetic_labels, self.synthetic_sensitive_attr = synthesizer.synthesize(self.global_dataset)
+    #         ##print('啦啦啦我是假数据'+str(self.synthetic_data))
+    #     # 从生成公平梯度后的轮次开始使用
+    #     if round_idx >= self.args.synthetic_data_generation_round:
+    #         # 将公平梯度添加到 w_locals
+    #         print('啦啦啦我是假梯度额外的步骤我运行了'+str(self.args.synthetic_data_generation_round))
+    #         device = next(self.model_trainer.model.parameters()).device
+    #         self.synthetic_data = self.synthetic_data.to(device)
+    #         self.synthetic_labels = self.synthetic_labels.to(device)
+    #         self.synthetic_sensitive_attr = self.synthetic_sensitive_attr.to(device)
+        
+    #         self.fair_gradient = self.generate_fair_gradient(
+    #             self.model_trainer.model,
+    #             (self.synthetic_data, self.synthetic_labels, self.synthetic_sensitive_attr),
+    #             learning_rate=self.args.learning_rate,
+    #         )
+
+    #         fair_gradient = {k: v.to(device) for k, v in self.fair_gradient.items()}
+    #         ##print('啦啦啦我是公平梯度'+str(fair_gradient))
+    #         self.model_trainer.set_model_params(fair_gradient)
+    
+    #     if round_idx % self.args.save_epoches == 0:
+    #         torch.save(
+    #             self.model_trainer.model.state_dict(),
+    #             os.path.join(
+    #                 self.args.run_folder,
+    #                 "%s_at_%s.pt" % (self.args.save_model_name, round_idx),
+    #             ),
+    #         )
+    #         with open(
+    #             "%s/%s_locals_at_%s.pt"
+    #             % (self.args.run_folder, self.args.save_model_name, round_idx),
+    #             "wb",
+    #         ) as f:
+    #             pickle.dump(w_save, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    #     if (
+    #         round_idx == self.args.comm_round - 1
+    #         or round_idx % self.args.frequency_of_the_test == 0
+    #     ):
+    #         self._local_test_on_all_clients(round_idx)
+    #     ##print('啦啦啦我是全局参数'+str(w_global))
+    #     ##全局参数正常，在变化
+    #     return w_global
+
     def _client_sampling(self, round_idx, client_num_in_total, client_num_per_round):
         if client_num_in_total == client_num_per_round:
             client_indexes = self.args.users
@@ -674,61 +814,7 @@ class FedAvgAPI(object):
     def _generate_validation_set(self, num_samples=10000):
         return False
 
-    # def _aggregate(self, w_locals, round_idx):
-        # training_num = 0
-        # for idx in range(len(w_locals)):
-        #     (sample_num, averaged_params) = w_locals[idx]
-        #     training_num += sample_num
-
-        # (sample_num, averaged_params) = w_locals[0]
-        # for k in averaged_params.keys():
-        #     for i in range(0, len(w_locals)):
-        #         local_sample_number, local_model_params = w_locals[i]
-        #         w = local_sample_number / training_num
-        #         if i == 0:
-        #             averaged_params[k] = local_model_params[k] * w
-        #         else:
-        #             averaged_params[k] += local_model_params[k] * w
-
-        # return averaged_params
-        # def _aggregate_noniid_avg(self, w_locals):
-        #     # uniform aggregation
-        #     """
-        #     The old aggregate method will impact the model performance when it comes to Non-IID setting
-        #     Args:
-        #         w_locals:
-        #     Returns:
-        #     """
-        #     (_, averaged_params) = w_locals[0]
-        #     for k in averaged_params.keys():
-        #         temp_w = []
-        #         for _, local_w in w_locals:
-        #             temp_w.append(local_w[k])
-        #         averaged_params[k] = sum(temp_w) / len(temp_w)
-        #     return averaged_params
-
-
-
     def _aggregate(self, w_locals, round_idx):
-        logging.info(f"Aggregating using {self.aggregation_method} method")
-        if self.aggregation_method == 'fedavg':
-            return self._fedavg_aggregate(w_locals)
-        elif self.aggregation_method == 'median':
-            return self._median_aggregate(w_locals)
-        elif self.aggregation_method == 'trimmed_mean':
-            return self._trimmed_mean_aggregate(w_locals)
-        elif self.aggregation_method == 'multikrum':
-            return self._multikrum_aggregate(w_locals)
-        elif self.aggregation_method == 'deepsight':
-            return self._deepsight_aggregate(w_locals, round_idx)
-        elif self.aggregation_method == 'foolsgold':
-            return self._foolsgold_aggregate(w_locals)
-        elif self.aggregation_method == 'flame':
-            return self._flame_aggregate(w_locals, round_idx)
-        else:
-            raise ValueError(f"Unknown aggregation method: {self.aggregation_method}")
-
-    def _fedavg_aggregate(self, w_locals):
         training_num = 0
         for idx in range(len(w_locals)):
             (sample_num, averaged_params) = w_locals[idx]
@@ -760,246 +846,6 @@ class FedAvgAPI(object):
                     temp_w.append(local_w[k])
                 averaged_params[k] = sum(temp_w) / len(temp_w)
             return averaged_params
-
-    def _deepsight_aggregate(self, w_locals, round_idx):
-        w_global = {}
-        for k in w_locals[0][1].keys():
-            weights = torch.stack([w[1][k].float() for w in w_locals])
-            
-            # 确保所有权重张量具有相同的形状
-            if len(self.deepsight_memory) > 0 and self.deepsight_memory[0][k].shape != weights.shape:
-                # 如果形状不匹配，重新初始化 deepsight_memory
-                self.deepsight_memory = []
-            
-            if len(self.deepsight_memory) == 0:
-                self.deepsight_memory = [{k: torch.zeros_like(weights) for k in w_locals[0][1].keys()}]
-            
-            # 更新 deepsight_memory
-            if len(self.deepsight_memory) >= self.deepsight_window_size:
-                self.deepsight_memory.pop(0)
-            self.deepsight_memory.append({k: weights.clone() for k in w_locals[0][1].keys()})
-            
-            # 计算历史权重
-            historical_weights = torch.stack([mem[k] for mem in self.deepsight_memory])
-            
-            # 计算每个客户端的权重
-            client_weights = torch.sum(historical_weights, dim=0)
-            client_weights = torch.softmax(client_weights, dim=0)
-            
-            # 使用客户端权重进行加权平均
-            w_global[k] = torch.sum(weights * client_weights.unsqueeze(1), dim=0)
-        
-        # 确保聚合后的权重与原始模型形状一致
-        original_state_dict = self.model_trainer.get_model_params()
-        for k, v in w_global.items():
-            if k in original_state_dict:
-                if v.shape != original_state_dict[k].shape:
-                    logging.warning(f"Shape mismatch for {k}: aggregated {v.shape}, original {original_state_dict[k].shape}")
-                    # 尝试重塑权重以匹配原始形状
-                    try:
-                        w_global[k] = v.view(original_state_dict[k].shape)
-                    except RuntimeError:
-                        logging.error(f"Cannot reshape {k} from {v.shape} to {original_state_dict[k].shape}")
-                        # 如果无法重塑，保留原始权重
-                        w_global[k] = original_state_dict[k]
-        
-        return w_global
-
-    def _flame_aggregate(self, w_locals, round_idx):
-        local_model_vector = []
-        update_params = []
-        weight_accumulator = {}
-        
-        # 初始化 weight_accumulator
-        for name, data in self.model_trainer.get_model_params().items():
-            weight_accumulator[name] = torch.zeros_like(data)
-
-        # 准备数据
-        for client_data in w_locals:
-            local_model_vector_sub = []
-            update_params_sub = []
-            for name, param in client_data[1].items():
-                local_model_vector_sub.append(param.view(-1))
-                update_params_value = param - self.model_trainer.get_model_params()[name]
-                update_params_sub.append(update_params_value.view(-1))
-            
-            local_model_vector.append(torch.cat(local_model_vector_sub).cuda())
-            update_params.append(torch.cat(update_params_sub).cuda())
-
-        # 执行 FLAME 聚合
-        benign_client, clip_value = self._flame(local_model_vector=local_model_vector, update_params=update_params)
-        
-        # 聚合更新
-        for ind in benign_client:
-            client_weight, client_model = w_locals[ind]
-            for name, param in client_model.items():
-                if name in self.model_trainer.get_model_params():
-                    update = param - self.model_trainer.get_model_params()[name]
-                    # 应用裁剪
-                    update_norm = torch.norm(update)
-                    scale = min(1.0, clip_value / update_norm)
-                    weight_accumulator[name].add_(update * scale)
-
-        # 应用更新到全局模型
-        updated_model = {}
-        for name, data in self.model_trainer.get_model_params().items():
-            if name in weight_accumulator:
-                update = weight_accumulator[name] * (self.args.eta / len(benign_client))
-                if self.args.noise_sigma > 0:
-                    noise = torch.cuda.FloatTensor(data.shape).normal_(mean=0, std=self.args.noise_sigma * clip_value)
-                    update.add_(noise)
-                updated_model[name] = data + update
-            else:
-                updated_model[name] = data
-
-        return updated_model
-
-    def _flame(self, local_model_vector, update_params):
-        cos = torch.nn.CosineSimilarity(dim=0, eps=1e-6).cuda()
-        cos_list = []
-
-        for i in range(len(local_model_vector)):
-            cos_i = []
-            for j in range(len(local_model_vector)):
-                cos_ij = 1 - cos(local_model_vector[i], local_model_vector[j])
-                cos_i.append(cos_ij.item())
-            cos_list.append(cos_i)
-
-        num_clients = len(local_model_vector)
-        clusterer = hdbscan.HDBSCAN(min_cluster_size=num_clients//2 + 1, min_samples=1, allow_single_cluster=True).fit(cos_list)
-
-        benign_client = []
-        norm_list = []
-
-        if clusterer.labels_.max() < 0:
-            benign_client = list(range(len(local_model_vector)))
-            norm_list = [torch.norm(update, p=2).item() for update in update_params]
-        else:
-            max_cluster_index = np.argmax(np.bincount(clusterer.labels_[clusterer.labels_ >= 0]))
-            for i, label in enumerate(clusterer.labels_):
-                if label == max_cluster_index:
-                    benign_client.append(i)
-                    norm_list.append(torch.norm(update_params[i], p=2).item())
-
-        clip_value = np.median(norm_list)
-        return benign_client, clip_value
-
-
-    def _multikrum_aggregate(self, w_locals):
-        candidates = []
-        candidate_indices = []
-        remaining_updates = [w for _, w in w_locals]
-        all_indices = np.arange(len(w_locals))
-
-        while len(remaining_updates) > 2 * self.args.no_of_adversaries + 2:
-            distances = []
-            for i, update in enumerate(remaining_updates):
-                distance = []
-                update_tensor = torch.cat([torch.flatten(x) for x in update.values()])
-                for j, update_ in enumerate(remaining_updates):
-                    if i != j:
-                        update_tensor_ = torch.cat([torch.flatten(x) for x in update_.values()])
-                        distance.append(torch.norm(update_tensor - update_tensor_).item())
-                    else:
-                        distance.append(0)
-                distances.append(distance)
-            distances = torch.tensor(distances)
-
-            sorted_indices = torch.argsort(distances, dim=1)
-            scores = torch.sum(sorted_indices[:, :len(remaining_updates) - 2 - self.args.no_of_adversaries], dim=1)
-            best_index = torch.argmin(scores).item()
-
-            candidate_indices.append(all_indices[best_index])
-            all_indices = np.delete(all_indices, best_index)
-            candidates.append(remaining_updates[best_index])
-            del remaining_updates[best_index]
-
-        # Convert the dictionaries in the candidates list to tensors
-        candidate_tensors = [torch.cat([torch.flatten(x) for x in candidate.values()]) for candidate in candidates]
-
-        # Aggregate the selected candidates
-        aggregated_update = torch.mean(torch.stack(candidate_tensors), dim=0)
-
-        # Reshape the aggregated update back to the original model structure
-        aggregated_model = {}
-        start = 0
-        for key, value in w_locals[0][1].items():
-            shape = value.shape
-            numel = value.numel()
-            aggregated_model[key] = aggregated_update[start:start+numel].reshape(shape)
-            start += numel
-
-        return aggregated_model
-
-    def _foolsgold_aggregate(self, w_locals):
-        selected_clients = list(range(len(w_locals)))
-        cs = np.zeros((len(w_locals), len(w_locals)))
-
-        # 更新 update_history
-        for i, (_, update) in enumerate(w_locals):
-            if f"{self.last_layer_name}.weight" in update and f"{self.last_layer_name}.bias" in update:
-                last_weight = update[f"{self.last_layer_name}.weight"].detach().clone().view(-1)
-                last_bias = update[f"{self.last_layer_name}.bias"].detach().clone().view(-1)
-                last_params = torch.cat((last_weight, last_bias))
-                self.update_history[i] += last_params.cpu()
-            else:
-                logging.warning(f"Last layer {self.last_layer_name} not found in client update. Skipping this client for FoolsGold.")
-
-        # 计算余弦相似度
-        for i in range(len(w_locals)):
-            for j in range(len(w_locals)):
-                if self.update_history[i].norm() > 0 and self.update_history[j].norm() > 0:
-                    cs[i][j] = F.cosine_similarity(self.update_history[i].unsqueeze(0), 
-                                                self.update_history[j].unsqueeze(0)).item()
-
-        
-        cs = cs - np.eye(len(w_locals))
-        maxcs = np.max(cs, axis=1) + 1e-5
-        for i in range(len(w_locals)):
-            for j in range(len(w_locals)):
-                if i == j:
-                    continue
-                if maxcs[i] < maxcs[j]:
-                    cs[i][j] = cs[i][j] * maxcs[i] / maxcs[j]
-        
-        wv = 1 - np.max(cs, axis=1)
-        wv[wv > 1] = 1
-        wv[wv < 0] = 0
-        wv = wv / np.max(wv)
-        wv[wv == 1] = .99
-        wv = (np.log((wv / (1 - wv)) + 1e-5) + 0.5)
-        wv[np.isinf(wv) + wv > 1] = 1
-        wv[wv < 0] = 0
-        
-        # 聚合更新
-        aggregated_update = {}
-        for name in w_locals[0][1].keys():
-            aggregated_update[name] = torch.zeros_like(w_locals[0][1][name])
-            for i, (_, update) in enumerate(w_locals):
-                aggregated_update[name] += wv[i] * update[name]
-        
-        return aggregated_update
-
-    def _median_aggregate(self, w_locals):
-        averaged_params = {}
-        for k in w_locals[0][1].keys():
-            k_weights = torch.stack([w[1][k].float() for w in w_locals])
-            averaged_params[k] = torch.median(k_weights, dim=0).values
-        return averaged_params
-
-    def _trimmed_mean_aggregate(self, w_locals, trim_ratio=0.1):
-        averaged_params = {}
-        for k in w_locals[0][1].keys():
-            k_weights = torch.stack([w[1][k].float() for w in w_locals])
-            k_sorted, _ = torch.sort(k_weights, dim=0)
-            n = k_weights.size(0)
-            trim = int(trim_ratio * n)
-            if trim > 0:
-                k_trimmed = k_sorted[trim:-trim]
-            else:
-                k_trimmed = k_sorted
-            averaged_params[k] = torch.mean(k_trimmed, dim=0)
-        return averaged_params
 
     def _local_test_on_all_clients(self, round_idx):
         logging.info("################local_test_on_all_clients : {}".format(round_idx))
@@ -1083,6 +929,75 @@ class FedAvgAPI(object):
 
         # Plot metrics
         self.plot_metrics(metrics_data)
+
+        # for idx, client_idx in enumerate(self.args.users):
+        #     """
+        #     Note: for datasets like "fed_CIFAR100" and "fed_shakespheare",
+        #     the training client number is larger than the testing client number
+        #     """
+        #     if self.test_data_local_dict[client_idx] is None:
+        #         continue
+        #     client = self.client_list[idx]
+        #     train_local_metrics = client.local_test(False)
+        #     train_metrics["num_samples"].append(
+        #         copy.deepcopy(train_local_metrics["test_total"])
+        #     )
+        #     train_metrics["num_correct"].append(
+        #         copy.deepcopy(train_local_metrics["test_correct"])
+        #     )
+        #     train_metrics["losses"].append(
+        #         copy.deepcopy(train_local_metrics["test_loss"])
+        #     )
+        #     train_metrics["eo_gap"].append(copy.deepcopy(train_local_metrics["eo_gap"]))
+        #     train_metrics["dp_gap"].append(copy.deepcopy(train_local_metrics["dp_gap"]))
+
+        #     test_local_metrics = client.local_test(True)
+        #     test_metrics["num_samples"].append(
+        #         copy.deepcopy(test_local_metrics["test_total"])
+        #     )
+        #     test_metrics["num_correct"].append(
+        #         copy.deepcopy(test_local_metrics["test_correct"])
+        #     )
+        #     test_metrics["losses"].append(
+        #         copy.deepcopy(test_local_metrics["test_loss"])
+        #     )
+        #     test_metrics["eo_gap"].append(copy.deepcopy(test_local_metrics["eo_gap"]))
+        #     test_metrics["dp_gap"].append(copy.deepcopy(test_local_metrics["dp_gap"]))
+        # # test on training dataset
+        # train_acc = sum(train_metrics["num_correct"]) / sum(
+        #     train_metrics["num_samples"]
+        # )
+        # train_loss = sum(train_metrics["losses"]) / sum(train_metrics["num_samples"])
+        # train_dp_gap = sum(train_metrics["dp_gap"]) / len(self.args.users)
+        # train_eo_gap = sum(train_metrics["eo_gap"]) / len(self.args.users)
+        # ##print(train_metrics)
+        # # test on test dataset
+        # test_acc = sum(test_metrics["num_correct"]) / sum(test_metrics["num_samples"])
+        # test_loss = sum(test_metrics["losses"]) / sum(test_metrics["num_samples"])
+        # test_dp_gap = sum(test_metrics["dp_gap"]) / len(self.args.users)
+        # test_eo_gap = sum(test_metrics["eo_gap"]) / len(self.args.users)
+        # logging.info(train_metrics["eo_gap"])
+        # logging.info(
+        #     "Train acc: {} Train Loss: {}, Test acc: {} Test Loss: {}".format(
+        #         train_acc, train_loss, test_acc, test_loss
+        #     )
+        # )
+        # logging.info(
+        #     "Train dp gap: {} Train eo gap: {}, Test dp gap: {} Test eo gap: {}".format(
+        #         train_dp_gap, train_eo_gap, test_dp_gap, test_eo_gap
+        #     )
+        # )
+
+        # if self.args.enable_wandb:
+        #     wandb.log({"Test/Acc": test_acc, "round": round_idx})
+        #     wandb.log({"Test/Loss": test_loss, "round": round_idx})
+        #     wandb.log({"Train/Acc": train_acc, "round": round_idx})
+        #     wandb.log({"Train/Loss": train_loss, "round": round_idx})
+        # self.acc_list_all_round.append(test_acc)
+        # self.eo_list_all_round.append(test_eo_gap)
+        # self.dp_list_all_round.append(test_dp_gap)
+        # logging.info( "准确性list: {} eo list: {}, dp list: {}".format(
+        #     self.acc_list_all_round, self.eo_list_all_round, self.dp_list_all_round))
 
     def _local_test_on_validation_set(self, round_idx):
         logging.info(
