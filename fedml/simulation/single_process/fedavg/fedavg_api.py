@@ -24,7 +24,7 @@ from matplotlib.ticker import PercentFormatter
 
 
 class FedAvgAPI(object):
-    aggregation_method = 'foolsgold' # median trimmed_mean fedavg flame multikrum foolsgold deepsight
+    aggregation_method = 'fedavg' # median trimmed_mean fedavg flame multikrum foolsgold deepsight
 
     def __init__(self, args, device, dataset, model, model_trainer=None):
         self.device = device
