@@ -21,32 +21,24 @@ conda env create -f environment.yml
 To run federated learning on the Income dataset, use the command:
 
 ```
-python main.py --cf config/config_fedavg_income.yaml
+conda activate bias_propagation
+python3 fairfed/main.py --cf fairfed/config/config_fedavg_income.yaml
 ```
 
-Similarly, to run centralized training, use the following command:
 
 ```
-python main.py --cf config/config_centralized_income.yaml
-```
-
-For standalone training, use the command:
+conda activate bias_propagation
+python3 fairfed/main.py --cf fairfed/config/config_fedavg_health.yaml
 
 ```
-python main.py --cf config/config_standalone_income.yaml
-```
-
-We report the average results over five different runs. To reproduce the results, run the command five times with different random seeds, which are indicated by `common_args.random_seed` in the YAML file.
-
-To get the results on other datasets (e.g., Health, Employment), run the `main.py` file with `config/config_standalone_{dataset}.yaml`, where the dataset can be `health`, `employment`, or `income`.
-
-#### 2. Save all the information.
-
-Run the following command to get the performance of the models for plotting figures:
 
 ```
-python saved_information.py --task income
+conda activate bias_propagation
+python3 fairfed/main.py --cf fairfed/config/config_fedavg_employee.yaml
+
 ```
+
+
 
 By default, the script collects the prediction information from 5 runs with random seeds 0 to
 
