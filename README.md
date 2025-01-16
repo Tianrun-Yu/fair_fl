@@ -22,19 +22,19 @@ To run federated learning on the Income dataset, use the command:
 
 ```
 conda activate bias_propagation
-python3 fairfed/main.py --cf fairfed/config/config_fedavg_income.yaml
+python3 fair_fl/main.py --cf fair_fl/config/config_fedavg_income.yaml
 ```
 
 
 ```
 conda activate bias_propagation
-python3 fairfed/main.py --cf fairfed/config/config_fedavg_health.yaml
+python3 fair_fl/main.py --cf fair_fl/config/config_fedavg_health.yaml
 
 ```
 
 ```
 conda activate bias_propagation
-python3 fairfed/main.py --cf fairfed/config/config_fedavg_employee.yaml
+python3 fair_fl/main.py --cf fair_fl/config/config_fedavg_employee.yaml
 
 ```
 
